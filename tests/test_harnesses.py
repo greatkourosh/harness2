@@ -194,6 +194,32 @@ class SubstrateTests(unittest.TestCase):
         self.assertIn("--permission-mode", spec.headless)
         self.assertIn("acceptEdits", spec.headless)
 
+    def test_deepseek_headless_passes_no_model_flag(self):
+        """dsh selects its model from the profile, not from argv."""
+        spec = registry.load_one("deepseek")
+        self.assertEqual(spec.model_flag, "")
+        substrate = ExternalCliSubstrate("deepseek")
+        self.assertNotIn("--model", substrate.argv("x", Path("/ws"), "glm-cn/glm-5.3"))
+
+    def test_deepseek_apply_sets_the_default_model_entry(self):
+        """A provider entry alone leaves a headless dsh run with no model chosen."""
+        spec = registry.load_one("deepseek")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cordis.patch.yml"
+            adapter = adapters.DeepseekAdapter(
+                type(spec)(**{**spec.__dict__, "config_path": path})
+            )
+            with patch.object(adapters.config, "NINEROUTER_BASE_URL", "http://gw/v1"), patch.object(
+                adapters.config, "NINEROUTER_API_KEY", "k"
+            ):
+                adapter.apply(allow=["glm-cn/glm-5.3"])
+            import yaml
+
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            default = next(e for e in data if e["id"] == "agent-default-model")
+            self.assertEqual(default["config"]["provider"], "9router")
+            self.assertEqual(default["config"]["model"], "glm-cn/glm-5.3")
+
     def test_exec_env_applies_adapter_values_after_the_drops(self):
         """A dropped ambient var must not also be the value the adapter supplies."""
         substrate = ExternalCliSubstrate("claude-code")

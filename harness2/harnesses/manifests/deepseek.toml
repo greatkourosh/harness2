@@ -1,24 +1,35 @@
 # deepseek (dsh) — DeepSeek's plugin-based harness on Cordis.
 #
-# The live, editable layer is a YAML patch array. The provider entry ids are
-# `llm-pi-ai` (the generic OpenAI/Anthropic-compatible route) and
-# `agent-default-model`. Credentials come from `apiKeyEnv`, a CredentialRef
-# naming an env var, not a literal key — so `apply` does not write secrets here.
+# TWO facts this manifest encodes, both verified against dsh 0.2.1-rc.2:
+#
+# 1. `dsh --profile headless` takes NO `--model` flag. The model is selected by
+#    the profile's own `agent-default-model` plugin, so `model_flag` is empty and
+#    the runner's model argument is ignored. Changing the model means editing the
+#    profile patch, which is what `apply` writes.
+#
+# 2. Each profile has its OWN config file under `~/.dsh/profiles/<name>/`. The
+#    one that runs headlessly is `headless`; `web` is the browser UI's and is a
+#    separate file. A model group written to the wrong one has no effect on a
+#    `--profile headless` run, so `config_path` names the headless profile.
+#
+# Credentials are a CredentialRef (`apiKeyEnv` names an env var), not a literal
+# key, so `apply` writes the var *name* and never a secret.
 
 id = "deepseek"
 label = "deepseek harness (dsh)"
-config_path = "~/.dsh/profiles/web/cordis.patch.yml"
+config_path = "~/.dsh/profiles/headless/cordis.patch.yml"
 config_format = "dsh-patch"
 adapter = "deepseek"
 key_name = "deepseek_harness"
 
 binary = "dsh"
-headless = ["--profile", "headless", "{prompt}"]
-model_flag = "--model"
+# No {model}: the profile picks the model. --json gives machine-readable events.
+headless = ["--profile", "headless", "--json", "{prompt}"]
+model_flag = ""
 trace_glob = "~/.dsh/sessions/**/*"
 can_run = true
 
-# Group assignment: the Qwen/Llama open-weight group.
+# Group assignment: the Qwen/GLM/open-weight group.
 allowed_models = ["qwen*", "glm*", "deepseek*", "local"]
 
 [env]

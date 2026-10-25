@@ -278,6 +278,20 @@ class DeepseekAdapter(Adapter):
             "baseURL": config.NINEROUTER_BASE_URL,
             "models": [{"id": mid} for mid in models],
         }
+        # dsh takes no --model flag: the headless profile reads its model from the
+        # `agent-default-model` plugin, so a provider entry alone leaves the run
+        # with no model selected. The first allowed model becomes the default.
+        if models:
+            default = next((e for e in data if e.get("id") == "agent-default-model"), None)
+            if default is None:
+                default = {
+                    "id": "agent-default-model",
+                    "name": "@deepseek-ai/dsh-agent-default-model",
+                    "config": {},
+                }
+                data.append(default)
+            default.setdefault("config", {})["provider"] = GATEWAY_ID
+            default["config"]["model"] = models[0]
         backup = _backup(self.spec.config_path)
         self.spec.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.spec.config_path.write_text(
