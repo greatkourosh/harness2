@@ -1,5 +1,7 @@
 # Harness control plane
 
+> فارسی: [راهنمای فارسی](راهنمای-فارسی.md)
+
 `harness2-harness` manages the agent frameworks installed on this machine as
 **independent peers** and points them all at one model gateway. They are never
 nested: each keeps its own config file, its own CLI, its own skills, and its own
@@ -49,7 +51,7 @@ the user's own file, often carrying settings this package knows nothing about.
 |---|---|---|---|
 | `pi` | `~/.pi/agent/models.json` | `pi --print` | routing combos |
 | `opencode` | `~/.config/opencode/opencode.json` | `opencode run` | Claude |
-| `deepseek` (dsh) | `~/.dsh/profiles/web/cordis.patch.yml` | `dsh --profile headless` | `qwen*`/`glm*`/`deepseek*` |
+| `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `qwen*`/`glm*`/`deepseek*` |
 | `claude-code` | `~/.claude/settings.json` | `claude -p` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
 
@@ -58,6 +60,52 @@ prompt and prints an answer. Its Code sessions run through the `claude` CLI, so
 they are the `claude-code` harness.
 
 The deepseek adapter needs `pyyaml` (`uv pip install -e '.[harnesses]'`).
+
+Note the two dsh facts the manifest encodes, both verified by running it:
+
+- **Each profile has its own config file** under `~/.dsh/profiles/<name>/`. The
+  one that runs headlessly is `headless`; `web` belongs to the browser UI. A
+  model group written to the wrong profile has no effect on a `--profile
+  headless` run.
+- **`dsh --profile headless` takes no `--model` flag.** The model comes from the
+  profile's `agent-default-model` plugin, so `model_flag` is empty and `apply`
+  writes that entry — a provider block alone would leave the run with no model.
+
+## Getting the binaries on PATH
+
+`harness2-harness run` and `bench` exec the harness's `binary` by name, so it
+must be resolvable on `PATH`. `harness2-harness list` shows `runs: no` for any
+harness whose binary is missing.
+
+`claude` installs itself on `PATH`. The other three do not, and each needs a
+different treatment:
+
+```bash
+# pi and dsh ship an executable file with a `#!/usr/bin/env node` shebang,
+# so a symlink is enough.
+ln -sf ~/projects/pi_harness/packages/coding-agent/dist/bundle/cli.js ~/.local/bin/pi
+ln -sf ~/projects/deepseek_harness/apps/cli/lib/bin.js           ~/.local/bin/dsh
+
+# opencode needs a wrapper, not a symlink: the pinned checkout has no built
+# dist, and its `bin/opencode` is CommonJS inside an ESM package, which fails
+# with "ReferenceError: require is not defined". Harness2 runs it from source
+# through bun, so the wrapper mirrors that.
+```
+
+```bash
+cat > ~/.local/bin/opencode <<'EOF'
+#!/bin/bash
+exec /path/to/harness2/dependencies/tools/node_modules/.bin/bun \
+  run --cwd /path/to/harness2/dependencies/opencode/packages/opencode \
+  --conditions=browser src/index.ts "$@"
+EOF
+chmod +x ~/.local/bin/opencode
+```
+
+Verify with `pi --version`, `dsh --version`, `opencode --version`.
+
+Alternatively, set `binary` in the manifest to an absolute path and skip
+`PATH` entirely — the runner takes either.
 
 ## Model isolation
 
