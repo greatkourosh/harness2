@@ -802,6 +802,7 @@ class JobBenchAdapter:
             "MAX_CONCURRENT": "1",
             "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX": str(OUTPUT_TOKEN_MAX),
         }
+        env = self.substrate.oc_config_env(env)
         self._run_runner(OC_RUNNER, env, wall=2 * t + 600, label=label)
         return [self._require_artifacts(task_id, label)]
 

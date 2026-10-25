@@ -622,6 +622,18 @@ def run_batch(
             "NO_FORCE_BUILD": "1",
             "HARNESS2_WB_VERTEX_URL": config.VERTEX_OPENAI_URL + "/chat/completions",
         }
+        if config.SOLVER_MODEL_OC.startswith("9router/"):
+            # WorkBuddy runs in Docker, so the gateway is reached through the
+            # host gateway rather than the host's loopback address.
+            container_url = config.NINEROUTER_BASE_URL.replace(
+                "127.0.0.1", "host.docker.internal"
+            ).replace("localhost", "host.docker.internal")
+            env["HARNESS2_9ROUTER_BASE_URL"] = container_url
+            env["HARNESS2_9ROUTER_API_KEY"] = config.NINEROUTER_API_KEY
+            # The OpenCode agent inside the container reads its provider block
+            # from these two variables.
+            env["OPENCODE_BASE_URL"] = container_url
+            env["OPENCODE_API_KEY"] = config.NINEROUTER_API_KEY
         try:
             with _slots[substrate]:
                 _log(f"{label}: {len(todo)} task(s) x k={k} [{substrate}]")

@@ -51,6 +51,33 @@ judge's direct providers when their credentials are configured. For WorkBuddy,
 setup generates the Gemini solver and judge routes from these settings; rerun
 setup after changing either model.
 
+### 9router backend
+
+[9router](http://127.0.0.1:20128) is a local OpenAI-compatible gateway that
+fronts many upstream providers. It needs no Google Cloud credentials.
+
+| Setting | Meaning |
+|---|---|
+| `HARNESS2_9ROUTER_BASE_URL` | Gateway base URL, ending in `/v1` |
+| `HARNESS2_9ROUTER_API_KEY` | Gateway access token |
+| `HARNESS2_9ROUTER_ADMIN_PASSWORD` | Gateway dashboard password; only the harness control plane's key and settings calls use it, never a model call |
+| `HARNESS2_SOLVER_MODEL` | `9router/<id>` — a combo (`All`, `Safe`, `Coding`, `General`, `Fast`, `Reasoning`, `Vision`, `local`) or any id the gateway serves |
+| `HARNESS2_JUDGE_MODEL` | `9router/<id>`; the LAB judge uses the Anthropic Messages protocol, the JobBench judge the OpenAI chat completions protocol |
+
+Setup writes the OpenCode `9router` provider block into
+`dependencies/opencode-config/opencode/opencode.json`; rerun setup after
+changing the base URL or the key. `harness2-check` verifies that the gateway
+answers and that the provider block is present.
+
+The pinned OpenCode rejects a global `~/.config/opencode/opencode.json`
+written for a newer schema, so every Harness² run points `XDG_CONFIG_HOME` at
+`dependencies/opencode-config` instead of the user's own config directory.
+
+The same gateway also backs the other agent frameworks on the machine. See the
+[harness control plane](HARNESSES.md) for `harness2-harness`, which keeps pi,
+opencode, deepseek, claude code and claude desktop as independent peers on it,
+each with its own model group.
+
 ### Authentication alternatives
 
 On a machine with a configured attached service account, Application Default

@@ -31,7 +31,7 @@ from dataclasses import replace
 from functools import cache
 from pathlib import Path
 
-from .. import config
+from .. import config, ninerouter
 from ..core import runmark as RM
 from ..core import tree as HT
 from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
@@ -387,12 +387,21 @@ except Exception as exc:
 
 
 def _lab_env() -> dict[str, str]:
-    return {
+    env = {
         **os.environ,
         "PYTHONPATH": str(config.lab_repo()),
         "PATH": f"{config.LAB_PYTHON.parent}:{config.BUN.parent}:{config.CODEX_DIST}/codex-path:"
         + os.environ.get("PATH", ""),
+        # OpenCode must not read the user's global config: the pinned version
+        # rejects one written for a newer schema, and Harness2's own config
+        # home carries the 9router provider block.
+        "XDG_CONFIG_HOME": str(ninerouter.config_home()),
     }
+    if config.LAB_JUDGE_MODEL and config.NINEROUTER_BASE_URL and config.JUDGE_IS_9ROUTER:
+        # The LAB judge talks Anthropic Messages; 9router serves that protocol.
+        env["ANTHROPIC_BASE_URL"] = config.NINEROUTER_BASE_URL
+        env["ANTHROPIC_API_KEY"] = config.NINEROUTER_API_KEY
+    return env
 
 
 def _json_or_none(p: Path) -> dict | None:

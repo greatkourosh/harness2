@@ -20,7 +20,7 @@ import json
 import shutil
 import subprocess
 
-from . import config
+from . import config, ninerouter
 from .install import PATCHES, missing_runners
 from .substrate.opencode import OpencodeSubstrate
 
@@ -75,6 +75,16 @@ def check(adapter, *, judge=False) -> list[str]:
         )
     if not (config.OPENCODE_DIR / "node_modules").is_dir():
         errors.append(f"OpenCode dependencies missing; run harness2-setup {bench}")
+
+    if ninerouter.enabled():
+        problem = ninerouter.check_reachable()
+        if problem:
+            errors.append(problem)
+        provider = ninerouter.config_path(ninerouter.config_home())
+        if not provider.is_file():
+            errors.append(
+                f"9router provider block missing at {provider}; run harness2-setup {bench}"
+            )
 
     if any(
         m.startswith("google-vertex") for m in (config.SOLVER_MODEL_OC, config.IMPROVER_MODEL)

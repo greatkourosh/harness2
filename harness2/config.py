@@ -101,6 +101,16 @@ SOLVER_MODEL_CX = env("HARNESS2_CODEX_MODEL", SOLVER_MODEL_OC.split("/", 1)[-1])
 IMPROVER_MODEL = env("HARNESS2_IMPROVER_MODEL", SOLVER_MODEL_OC)
 JUDGE_MODEL = env("HARNESS2_JUDGE_MODEL", "")
 
+# 9router: an OpenAI-compatible gateway in front of many upstream providers.
+# When HARNESS2_9ROUTER_BASE_URL is set, OpenCode gets a `9router` provider and the
+# executor/improver model IDs are read as `9router/<9router-model-id>`.
+NINEROUTER_BASE_URL = env("HARNESS2_9ROUTER_BASE_URL", "")
+NINEROUTER_API_KEY = env("HARNESS2_9ROUTER_API_KEY", "")
+NINEROUTER_PROVIDER_ID = "9router"
+# 9router's own dashboard password; used only by the admin key API, never by a
+# model call. Empty disables the harness control plane's key management.
+NINEROUTER_ADMIN_PASSWORD = env("HARNESS2_9ROUTER_ADMIN_PASSWORD", "")
+
 DEPENDENCY_PINS = {
     "job-bench-eval": "fa03a17f9ff662f136798a274e10011c3aa00fd0",
     "workbuddy-bench": "b516950be5b56eb3be406c2f76ee1c5111dcb57f",
@@ -130,15 +140,24 @@ def lab_repo() -> Path:
 OPENCODE_DIR = DEPENDENCIES / "opencode"
 BUN = DEPENDENCIES / "tools" / "node_modules" / ".bin" / "bun"
 LAB_PYTHON = lab_repo() / ".venv" / "bin" / "python"
+# 9router speaks the Anthropic Messages API, so the LAB judge (Anthropic SDK)
+# reaches it through ANTHROPIC_BASE_URL with a bare model id.
+JUDGE_IS_9ROUTER = JUDGE_MODEL.startswith("9router/")
 LAB_JUDGE_MODEL = (
-    "vertex/" + JUDGE_MODEL if JUDGE_MODEL.startswith(("claude", "gemini")) else JUDGE_MODEL
+    JUDGE_MODEL[len("9router/") :]
+    if JUDGE_IS_9ROUTER
+    else ("vertex/" + JUDGE_MODEL if JUDGE_MODEL.startswith(("claude", "gemini")) else JUDGE_MODEL)
 )
 LAB_DELIV_CAP = 60000
 JB_JUDGE_PYTHON = jb_repo() / ".venv" / "bin" / "python"
 JB_JUDGE_MODEL = (
-    "google/" + JUDGE_MODEL
-    if JUDGE_MODEL.startswith("gemini") and not env("HARNESS2_JUDGE_BASE_URL")
-    else JUDGE_MODEL
+    JUDGE_MODEL[len("9router/") :]
+    if JUDGE_IS_9ROUTER
+    else (
+        "google/" + JUDGE_MODEL
+        if JUDGE_MODEL.startswith("gemini") and not env("HARNESS2_JUDGE_BASE_URL")
+        else JUDGE_MODEL
+    )
 )
 _vertex_host = (
     "aiplatform.googleapis.com"
@@ -149,8 +168,13 @@ VERTEX_OPENAI_URL = (
     f"https://{_vertex_host}/v1/projects/{VERTEX_PROJECT}"
     f"/locations/{VERTEX_REGION}/endpoints/openapi"
 )
-JB_JUDGE_API_BASE = env("HARNESS2_JUDGE_BASE_URL", VERTEX_OPENAI_URL if VERTEX_PROJECT else "")
-JB_JUDGE_API_KEY = env("HARNESS2_JUDGE_API_KEY", "")
+JB_JUDGE_API_BASE = env(
+    "HARNESS2_JUDGE_BASE_URL",
+    NINEROUTER_BASE_URL if JUDGE_IS_9ROUTER else (VERTEX_OPENAI_URL if VERTEX_PROJECT else ""),
+)
+JB_JUDGE_API_KEY = env(
+    "HARNESS2_JUDGE_API_KEY", NINEROUTER_API_KEY if JUDGE_IS_9ROUTER else ""
+)
 JB_JUDGE_REASONING_EFFORT = "low"
 JB_REPORTING_JUDGE_DETAILS = ""
 JB_OBS_TRUNC = 50000

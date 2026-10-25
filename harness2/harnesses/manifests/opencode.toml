@@ -1,0 +1,29 @@
+# opencode — the agent framework Harness2 also runs as a substrate.
+#
+# NOTE the key is `provider` (singular). The file at ~/.config/opencode uses the
+# newer `providers` key, which OpenCode v1.14.18 — the version Harness2 pins —
+# rejects outright ("Unrecognized key"). Harness2's own runs point
+# XDG_CONFIG_HOME at dependencies/opencode-config, so they never read this file.
+
+id = "opencode"
+label = "opencode (desktop config)"
+config_path = "~/.config/opencode/opencode.json"
+config_format = "opencode-provider"
+adapter = "opencode"
+key_name = "opencode_desktop"
+
+binary = "opencode"
+headless = ["run", "{prompt}"]
+model_flag = "--model"
+trace_glob = "~/.local/share/opencode/log/*.log"
+skills_dir = "~/.config/opencode/skill"
+
+# Group assignment: opencode gets the frontier Claude group.
+allowed_models = [
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-5",
+    "claude-opus-4-5",
+    "claude-opus-4-7",
+]

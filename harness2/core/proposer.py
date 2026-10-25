@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import config
+from .. import config, ninerouter
 from .spec import ChannelSpec
 
 SYSTEM_ARG_MAX = 120_000
@@ -272,6 +272,10 @@ class Proposer:
         )
         env["XDG_DATA_HOME"] = str(cwd / ".ocdata")
         env["XDG_STATE_HOME"] = str(cwd / ".ocstate")
+        # The pinned OpenCode rejects a global config written for a newer schema,
+        # so the run reads Harness2's own config home (which also carries the
+        # 9router provider block).
+        env["XDG_CONFIG_HOME"] = str(ninerouter.config_home())
 
         cmd = [
             str(config.BUN),

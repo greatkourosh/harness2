@@ -1,0 +1,24 @@
+# pi — Earendil Works coding agent.
+#
+# Config is JSON: {"providers": {"9router": {baseUrl, api, apiKey, models[]}}}.
+# pi's `api` for a gateway speaking OpenAI chat completions is
+# "openai-completions"; "anthropic-messages" is the alternative protocol.
+
+id = "pi"
+label = "pi (Earendil Works)"
+config_path = "~/.pi/agent/models.json"
+config_format = "pi-provider"
+adapter = "pi"
+key_name = "pi_harness"
+
+binary = "pi"
+headless = ["--print", "{prompt}"]
+model_flag = "--model"
+trace_glob = "~/.pi/agent/sessions/**/*.jsonl"
+skills_dir = "~/.pi/agent/skills"
+
+# Group assignment: pi is the local-model harness.
+allowed_models = ["All", "Safe", "Coding", "General", "Fast", "Reasoning", "Vision", "local"]
+
+[env]
+PI_CODING_AGENT_DIR = "~/.pi/agent"

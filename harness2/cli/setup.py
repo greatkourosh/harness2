@@ -20,7 +20,7 @@ import argparse
 import shutil
 import subprocess
 
-from harness2 import config, install
+from harness2 import config, install, ninerouter
 
 
 def main(argv=None):
@@ -106,6 +106,22 @@ def main(argv=None):
                 )
         if args.substrate == "cx":
             install.codex(dry_run=dry)
+        if ninerouter.enabled():
+            if dry:
+                print(
+                    "Configure OpenCode provider 9router: "
+                    f"{ninerouter.config_path(ninerouter.config_home())}",
+                    flush=True,
+                )
+            else:
+                # OpenCode only accepts a model the provider block declares, so
+                # the block must list every id a run may name.
+                models = ninerouter.fetch_models()
+                path = ninerouter.write_provider_config(ninerouter.config_home(), models)
+                print(
+                    f"Configure OpenCode provider 9router: {path} ({len(models)} models)",
+                    flush=True,
+                )
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         p.exit(1, f"setup failed: {exc}\n")
     print(

@@ -1,0 +1,28 @@
+# claude desktop — the Electron app (`claude-desktop`), NOT the CLI.
+#
+# It has no non-interactive mode: there is no flag that takes a prompt and
+# prints an answer, so `can_run = false` and `run` refuses with that reason.
+# It is registered anyway because it is a first-class entry in the harness
+# list — it spends the same gateway and belongs in the same inventory — and
+# because its Code sessions do go through the `claude` CLI, which is the
+# claude-code manifest.
+#
+# Its own config (~/.config/Claude/claude_desktop_config.json) carries UI
+# preferences and MCP servers, not a model endpoint, so `apply` writes nothing
+# here and reports why.
+
+id = "claude-desktop"
+label = "claude desktop (GUI)"
+config_path = "~/.config/Claude/claude_desktop_config.json"
+config_format = "claude-desktop"
+adapter = "claude-desktop"
+key_name = "claude_desktop"
+
+binary = "claude-desktop"
+headless = []
+model_flag = ""
+trace_glob = "~/.config/Claude/claude-code-sessions/**/*"
+can_run = false
+
+# Group assignment: the Gemini group, so the two Claude surfaces do not collide.
+allowed_models = ["gemini*", "claude-sonnet-4-6"]

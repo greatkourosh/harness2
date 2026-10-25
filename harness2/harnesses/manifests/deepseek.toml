@@ -1,0 +1,25 @@
+# deepseek (dsh) — DeepSeek's plugin-based harness on Cordis.
+#
+# The live, editable layer is a YAML patch array. The provider entry ids are
+# `llm-pi-ai` (the generic OpenAI/Anthropic-compatible route) and
+# `agent-default-model`. Credentials come from `apiKeyEnv`, a CredentialRef
+# naming an env var, not a literal key — so `apply` does not write secrets here.
+
+id = "deepseek"
+label = "deepseek harness (dsh)"
+config_path = "~/.dsh/profiles/web/cordis.patch.yml"
+config_format = "dsh-patch"
+adapter = "deepseek"
+key_name = "deepseek_harness"
+
+binary = "dsh"
+headless = ["--profile", "headless", "{prompt}"]
+model_flag = "--model"
+trace_glob = "~/.dsh/sessions/**/*"
+can_run = true
+
+# Group assignment: the Qwen/Llama open-weight group.
+allowed_models = ["qwen*", "glm*", "deepseek*", "local"]
+
+[env]
+DSH_HOME = "~/.dsh"

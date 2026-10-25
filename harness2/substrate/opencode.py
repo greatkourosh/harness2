@@ -33,7 +33,7 @@ import tempfile
 from pathlib import Path
 from typing import Mapping
 
-from .. import config
+from .. import config, ninerouter
 from ..core import runmark as RM
 from ..core import tree as HT
 from ..core.tree import SurfaceSpec
@@ -282,6 +282,19 @@ class OpencodeSubstrate:
         env = dict(base_env)
         env["OPENCODE_PERMISSION"] = json.dumps({"external_directory": allow})
         env["OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"] = str(int(output_token_max))
+        return env
+
+    @staticmethod
+    def oc_config_env(base_env: Mapping[str, str]) -> dict[str, str]:
+        """Point OpenCode at Harness2's own config home.
+
+        The pinned OpenCode aborts on a global config written for a newer
+        schema, so a run must not read the user's `~/.config/opencode`. The
+        same directory carries the 9router provider block when one is
+        configured.
+        """
+        env = dict(base_env)
+        env["XDG_CONFIG_HOME"] = str(ninerouter.config_home())
         return env
 
     def execute(

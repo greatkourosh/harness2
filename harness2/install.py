@@ -150,6 +150,9 @@ def overlays(name: str, *, dry_run=False):
 
 def workbuddy_models(*, dry_run=False):
     """Generate the two Vertex routes from the user's model IDs, never credentials."""
+    if config.SOLVER_MODEL_OC.startswith("9router/"):
+        _workbuddy_models_9router(dry_run=dry_run)
+        return
     solver = config.SOLVER_MODEL_OC.removeprefix("google-vertex/")
     judge = config.JUDGE_MODEL
     problem = ""
@@ -187,6 +190,35 @@ def workbuddy_models(*, dry_run=False):
         if not dry_run:
             path.parent.mkdir(parents=True, exist_ok=True)
 
+            path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _workbuddy_models_9router(*, dry_run=False):
+    """Generate the two 9router routes. Credentials come from the environment."""
+    solver = config.SOLVER_MODEL_OC.removeprefix("9router/")
+    judge = config.JUDGE_MODEL.removeprefix("9router/")
+    if not config.NINEROUTER_BASE_URL or not config.NINEROUTER_API_KEY:
+        problem = "Set HARNESS2_9ROUTER_BASE_URL and HARNESS2_9ROUTER_API_KEY for 9router"
+        if not dry_run:
+            raise config.ConfigError(problem)
+        print(f"Configure WorkBuddy solver and judge routes -- {problem}", flush=True)
+        return
+    for role, model in (("solver", solver), ("judge", judge)):
+        payload = {
+            "model": {
+                "name": model,
+                "protocols": ["openai", "anthropic"],
+                "backend_url_env": "HARNESS2_9ROUTER_BASE_URL",
+                "backend_key_env": "HARNESS2_9ROUTER_API_KEY",
+                "params": {
+                    "max_output_tokens": 64000 if role == "solver" else 16384,
+                },
+            }
+        }
+        path = config.wb_repo() / "configs" / "models" / "harness2" / f"{role}.yaml"
+        print(f"Configure WorkBuddy {role}: {model}", flush=True)
+        if not dry_run:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 

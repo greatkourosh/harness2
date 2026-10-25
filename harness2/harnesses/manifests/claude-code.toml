@@ -1,0 +1,26 @@
+# claude code — the `claude` CLI, which can point at any Anthropic-compatible
+# endpoint through its settings `env` block. 9router speaks the Anthropic
+# Messages protocol at /v1/messages, so the CLI reaches it the same way it
+# would reach the real API.
+#
+# CAUTION: this file is shared with claude desktop (see claude-desktop.toml).
+# Both processes read ~/.claude/settings.json, so an `apply` here also changes
+# what the desktop app's Code sessions use. That is intended — they are the
+# same Anthropic config surface — but it is the reason they are separate
+# manifests with separate model groups rather than one entry.
+
+id = "claude-code"
+label = "claude code (CLI)"
+config_path = "~/.claude/settings.json"
+config_format = "claude-settings"
+adapter = "claude-code"
+key_name = "claude_code_cli"
+
+binary = "claude"
+headless = ["-p", "{prompt}"]
+model_flag = "--model"
+trace_glob = "~/.claude/projects/**/*.jsonl"
+skills_dir = "~/.claude/skills"
+
+# Group assignment: claude code gets the frontier Claude group.
+allowed_models = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
