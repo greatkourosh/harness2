@@ -121,7 +121,9 @@ class Adapter:
         if model and self.spec.model_flag:
             argv += [self.spec.model_flag, model]
         env = {**os.environ, **self.spec.env}
-        env.update(self._run_env())
+        for leak in self.run_env_drop():
+            env.pop(leak, None)
+        env.update(self.run_env_set())
         try:
             proc = subprocess.run(
                 argv, cwd=str(cwd), env=env, capture_output=True, text=True, timeout=timeout
@@ -131,9 +133,13 @@ class Adapter:
         out = (proc.stdout or "").strip()
         return Result(proc.returncode == 0, f"exit {proc.returncode}", stdout=out)
 
-    def _run_env(self) -> dict[str, str]:
+    def run_env_set(self) -> dict[str, str]:
         """Env a harness needs to reach the gateway; empty when its config suffices."""
         return {}
+
+    def run_env_drop(self) -> tuple[str, ...]:
+        """Ambient vars that would override the harness's own config."""
+        return ()
 
     # -- reporting -------------------------------------------------------
 
@@ -279,7 +285,7 @@ class DeepseekAdapter(Adapter):
         )
         return Result(True, f"{len(models)} models", self.spec.config_path, backup)
 
-    def _run_env(self) -> dict[str, str]:
+    def run_env_set(self) -> dict[str, str]:
         return {"NINEROUTER_API_KEY": config.NINEROUTER_API_KEY}
 
 
@@ -308,10 +314,13 @@ class ClaudeCodeAdapter(Adapter):
         env.update(
             {
                 "ANTHROPIC_BASE_URL": config.NINEROUTER_BASE_URL.removesuffix("/v1"),
+                # A gateway key is a bearer token, not an upstream Anthropic key.
+                # Setting ANTHROPIC_API_KEY as well makes the CLI choose between
+                # two credentials and hang; the token alone authenticates.
                 "ANTHROPIC_AUTH_TOKEN": config.NINEROUTER_API_KEY,
-                "ANTHROPIC_API_KEY": config.NINEROUTER_API_KEY,
             }
         )
+        env.pop("ANTHROPIC_API_KEY", None)
         # The three aliases must keep their meanings: SONNET is the workhorse,
         # OPUS the hardest tasks, HAIKU the cheap background model. Assigning by
         # list position would give them whatever the glob sort produced, so each
@@ -329,6 +338,30 @@ class ClaudeCodeAdapter(Adapter):
         data["env"] = env
         backup = _write_json(self.spec.config_path, data)
         return Result(True, f"{len(models)} models", self.spec.config_path, backup)
+
+    def run_env_set(self) -> dict[str, str]:
+        """Environment that keeps the CLI on the gateway."""
+        env = {"ANTHROPIC_AUTH_TOKEN": config.NINEROUTER_API_KEY}
+        if config.NINEROUTER_BASE_URL:
+            env["ANTHROPIC_BASE_URL"] = config.NINEROUTER_BASE_URL.removesuffix("/v1")
+        return env
+
+    def run_env_drop(self) -> tuple[str, ...]:
+        """Vars the ambient environment may carry that would override the config.
+
+        A Claude Code session exports its own ANTHROPIC_* aliases (the session
+        this was written in had `claude-opus-5[1m]`, which the gateway does not
+        serve). Inherited, they beat settings.json and the run dies on a model
+        that does not exist, so they are removed and the CLI re-reads them.
+        ANTHROPIC_API_KEY goes too: two credentials make the CLI hang.
+        """
+        return (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        )
 
 
 class ClaudeDesktopAdapter(Adapter):

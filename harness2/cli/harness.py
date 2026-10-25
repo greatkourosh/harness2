@@ -21,6 +21,7 @@
     harness2-harness keys                 the gateway keys, per harness
     harness2-harness sync-keys            register a gateway key per harness
     harness2-harness run <id> <prompt>    one headless run through the gateway
+    harness2-harness bench <id> <prompt>  one task, writing a substrate run directory
     harness2-harness trace <id>           where that harness's own log lives
 
 `apply` and `sync-keys` change files on disk; a config write keeps a timestamped
@@ -153,6 +154,35 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_bench(args) -> int:
+    """Run one task through a harness and write a substrate run directory.
+
+    This is the path a benchmark uses, so the output has the same layout the
+    OpenCode and Codex runners produce (workspace/, output/, metrics.json).
+    """
+    from harness2.benchmarks import external_runner as ER
+
+    spec = _pick(args.harness)
+    model = args.model or (spec.allowed_models[0] if spec.allowed_models else "")
+    run_dir = ER.run_one(
+        harness=spec.id,
+        run_id=args.run_id,
+        results_root=Path(args.results_root),
+        task_dir=Path(args.task_dir) if args.task_dir else Path("/nonexistent"),
+        prompt=args.prompt,
+        model=model,
+        timeout=args.timeout,
+    )
+    metrics_path = run_dir / "metrics.json"
+    if metrics_path.is_file():
+        import json as _json
+
+        metrics = _json.loads(metrics_path.read_text(encoding="utf-8"))
+        print(f"{spec.id}: exit {metrics['exit_code']} | delivered {metrics['delivered']}")
+    print(f"run dir: {run_dir}")
+    return 0
+
+
 def cmd_trace(args) -> int:
     spec = _pick(args.harness)
     directory = spec.trace_dir()
@@ -230,6 +260,19 @@ def main(argv=None) -> int:
     p.add_argument("--limit", type=int, default=5, help="session files to list")
     p.add_argument("--tail", type=int, default=0, help="also print the last N lines of the newest")
     p.set_defaults(fn=cmd_trace)
+
+    p = sub.add_parser(
+        "bench",
+        help="run one task through a harness, writing a substrate run directory",
+    )
+    p.add_argument("harness")
+    p.add_argument("prompt")
+    p.add_argument("--run-id", required=True, help="e.g. demo/pi/base1")
+    p.add_argument("--results-root", required=True, help="where the run directory is written")
+    p.add_argument("--task-dir", default="", help="copied into the workspace; optional")
+    p.add_argument("--model", default="", help="default: the harness's first allowed model")
+    p.add_argument("--timeout", type=int, default=3600)
+    p.set_defaults(fn=cmd_bench)
 
     args = parser.parse_args(argv)
     try:

@@ -29,6 +29,10 @@ from ..core.spec import BenchmarkAdapter
 
 BENCHES = ("jb", "wb", "lab")
 WB_SUBSETS = ("office", "web", "code")
+# The benchmark adapters below hardcode this two-way split (each owns a
+# launcher body, a base tree and a result path per substrate), so an external
+# harness is NOT a third entry here: `--substrate pi` would silently build a
+# CodexSubstrate. External harnesses run through `harness2-harness bench`.
 SUBSTRATES = ("oc", "cx")
 
 MODES_DEFAULT = "parallel"

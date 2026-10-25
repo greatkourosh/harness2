@@ -121,3 +121,46 @@ Two limits worth knowing:
   made a request, which is why the harness's own session log is the useful half.
 - `HARNESS2_9ROUTER_ADMIN_PASSWORD` is needed for the key and settings APIs. It
   is the dashboard password and is never used for a model call.
+
+## Running a task through a harness
+
+`bench` runs one task through a registered harness and writes a *substrate run
+directory* — the same layout the OpenCode and Codex runners produce, so a
+downstream reader does not care which harness ran:
+
+```bash
+harness2-harness bench claude-code "Summarize documents/report.pdf" \
+  --run-id demo/claude-code/base1 \
+  --results-root runs/lab/results/claude-code \
+  --task-dir /path/to/task_folder \
+  --model claude-sonnet-4-6
+```
+
+```
+<results-root>/<run-id>/
+    workspace/                the task's own files, plus output/, which is graded
+    output/                   the graded copy of workspace/output
+    config.json               harness, model and resolved argv
+    <harness>_session.jsonl   the captured stream
+    metrics.json              turn/token/wall figures, written LAST as the completion mark
+```
+
+`harness2.substrate.ExternalCliSubstrate` is the underlying class. It is driven
+by the manifest: the argv comes from `headless`, the binary from `binary`, the
+environment from `env` plus the adapter's `run_env_set`/`run_env_drop` hooks.
+The editable tree is the **AGENTS.md + `.agents/skills/`** convention, which pi,
+codex and claude code all read, so one surface covers every external harness.
+
+Two things worth knowing about this path:
+
+- **`--substrate <harness-id>` is deliberately NOT accepted by the benchmark
+  runners.** `lab.py`, `jobbench.py` and `workbuddy.py` each hardcode a two-way
+  `oc`/`cx` split, owning a launcher body, a base tree and a result path per
+  substrate. An external id added to `SUBSTRATES` would silently construct a
+  `CodexSubstrate` and run the wrong agent. External harnesses go through
+  `harness2-harness bench` instead.
+- **A harness needs `--permission-mode acceptEdits` (or equivalent) to deliver
+  anything headlessly.** With the default mode `claude -p` holds every file
+  write for approval, has nobody to ask, and reports success having written
+  nothing — `exit_code: 0` with an empty `delivered`. The claude-code manifest
+  carries the flag for this reason.

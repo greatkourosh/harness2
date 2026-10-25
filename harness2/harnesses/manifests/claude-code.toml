@@ -17,7 +17,11 @@ adapter = "claude-code"
 key_name = "claude_code_cli"
 
 binary = "claude"
-headless = ["-p", "{prompt}"]
+# `--permission-mode acceptEdits` is required headlessly: with the default mode
+# every file write is held for approval, and a `-p` run has nobody to approve
+# it, so the agent reports success while delivering nothing. acceptEdits
+# auto-approves edits without the full `--dangerously-skip-permissions` bypass.
+headless = ["-p", "{prompt}", "--permission-mode", "acceptEdits"]
 model_flag = "--model"
 trace_glob = "~/.claude/projects/**/*.jsonl"
 skills_dir = "~/.claude/skills"

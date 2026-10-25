@@ -18,9 +18,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from harness2.harnesses import adapters, registry
+from harness2.substrate.external_cli import ExternalCliSubstrate
 
 
 class RegistryTests(unittest.TestCase):
@@ -157,6 +159,80 @@ class AdapterTests(unittest.TestCase):
         result = adapter.run("hi", model="m", cwd=Path("."))
         self.assertFalse(result.ok)
         self.assertIn("non-interactive", result.detail)
+
+
+class SubstrateTests(unittest.TestCase):
+    """The external-CLI substrate: argv from the manifest, env from the adapter."""
+
+    def test_substrate_name_is_the_harness_id(self):
+        """`--substrate pi` must resolve by id, not fall back to another class."""
+        self.assertEqual(ExternalCliSubstrate("pi").name, "pi")
+        self.assertEqual(ExternalCliSubstrate("claude-code").name, "claude-code")
+
+    def test_unknown_harness_raises_with_the_known_ids(self):
+        with self.assertRaises(ValueError) as ctx:
+            ExternalCliSubstrate("nope")
+        self.assertIn("pi", str(ctx.exception))
+
+    def test_argv_substitutes_prompt_then_appends_model(self):
+        substrate = ExternalCliSubstrate("pi")
+        argv = substrate.argv("hello", Path("/ws"), "9router/All")
+        self.assertEqual(argv, ["pi", "--print", "hello", "--model", "9router/All"])
+
+    def test_argv_places_model_when_the_template_asks_for_it(self):
+        """A manifest may put {model} inline; it must not then be appended twice."""
+        spec = registry.load_one("pi")
+        inline = type(spec)(**{**spec.__dict__, "headless": ("--model", "{model}", "{prompt}")})
+        substrate = ExternalCliSubstrate("pi")
+        substrate.spec = inline
+        argv = substrate.argv("hi", Path("/ws"), "9router/All")
+        self.assertEqual(argv, ["pi", "--model", "9router/All", "hi"])
+
+    def test_claude_code_headless_carries_a_permission_mode(self):
+        """Without it every write is held for approval and nothing is delivered."""
+        spec = registry.load_one("claude-code")
+        self.assertIn("--permission-mode", spec.headless)
+        self.assertIn("acceptEdits", spec.headless)
+
+    def test_exec_env_applies_adapter_values_after_the_drops(self):
+        """A dropped ambient var must not also be the value the adapter supplies."""
+        substrate = ExternalCliSubstrate("claude-code")
+        leaked = {
+            "ANTHROPIC_API_KEY": "leaked",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1m]",
+        }
+        env = substrate.exec_env(leaked)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("ANTHROPIC_DEFAULT_OPUS_MODEL", env)
+        self.assertTrue(env.get("ANTHROPIC_AUTH_TOKEN"))
+        self.assertTrue(env.get("ANTHROPIC_BASE_URL"))
+
+    def test_surface_is_the_agents_md_convention(self):
+        """Every external harness here reads AGENTS.md + .agents/skills."""
+        surface = ExternalCliSubstrate("pi").surface()
+        self.assertIn("AGENTS.md", surface.always_on)
+        self.assertEqual(surface.skill_dir, ".agents/skills")
+
+    def test_materialise_stages_only_the_root_entries(self):
+        substrate = ExternalCliSubstrate("pi")
+        bench = SimpleNamespace(install_mode="codex_root")
+        with tempfile.TemporaryDirectory() as tmp:
+            tree_dir = Path(tmp) / "tree"
+            (tree_dir / ".agents/skills/thing").mkdir(parents=True)
+            (tree_dir / "AGENTS.md").write_text("# body\n", encoding="utf-8")
+            (tree_dir / ".agents/skills/thing/SKILL.md").write_text(
+                "---\nname: thing\n", encoding="utf-8"
+            )
+            install = substrate.materialise(tree_dir, bench, {})
+            self.assertTrue((install.staging_dir / "AGENTS.md").is_file())
+            self.assertTrue((install.staging_dir / ".agents/skills/thing/SKILL.md").is_file())
+
+    def test_materialise_rejects_a_tree_without_agents_md(self):
+        substrate = ExternalCliSubstrate("pi")
+        bench = SimpleNamespace(install_mode="codex_root")
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                substrate.materialise(Path(tmp), bench, {})
 
 
 if __name__ == "__main__":

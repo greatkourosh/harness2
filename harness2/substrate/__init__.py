@@ -12,14 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The two solver substrates behind one interface (substrate/base.py).
+"""Solver substrates behind one interface (substrate/base.py).
 
-`OpencodeSubstrate` carries OPENCODE_SURFACE and three install modes; `CodexSubstrate`
-carries CODEX_SURFACE and one. Benchmark adapters supply the launcher body.
+`OpencodeSubstrate` carries OPENCODE_SURFACE and three install modes;
+`CodexSubstrate` carries CODEX_SURFACE and one; `ExternalCliSubstrate` carries the
+same AGENTS.md surface but is driven by a harness manifest instead of a hardcoded
+framework. Benchmark adapters supply the launcher body.
 """
 
 from .base import Install, Launcher, RunRequest, Substrate
 from .codex import CODEX_SURFACE, CodexSubstrate
+from .external_cli import (
+    EXTERNAL_HARNESS_IDS,
+    EXTERNAL_SURFACE,
+    ExternalCliSubstrate,
+    substrate_for,
+)
 from .opencode import OPENCODE_SURFACE, OpencodeSubstrate
 
 __all__ = [
@@ -31,4 +39,8 @@ __all__ = [
     "OPENCODE_SURFACE",
     "CodexSubstrate",
     "CODEX_SURFACE",
+    "ExternalCliSubstrate",
+    "EXTERNAL_SURFACE",
+    "EXTERNAL_HARNESS_IDS",
+    "substrate_for",
 ]
