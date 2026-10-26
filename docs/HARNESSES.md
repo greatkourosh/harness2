@@ -1,6 +1,8 @@
 # Harness control plane
 
 > فارسی: [راهنمای فارسی](راهنمای-فارسی.md)
+>
+> Panel: [task panel](WEB-PANEL.md)
 
 `harness2-harness` manages the agent frameworks installed on this machine as
 **independent peers** and points them all at one model gateway. They are never
