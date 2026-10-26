@@ -28,3 +28,9 @@ skills_dir = "~/.claude/skills"
 
 # Group assignment: claude code gets the frontier Claude group.
 allowed_models = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
+
+# Routing: the default, and the one for heavy written deliverables.
+routes = ["memo", "report", "legal", "contract", "analysis", "summarize", "docx"]
+default_model = "claude-sonnet-4-6"
+priority = 20
+default = true

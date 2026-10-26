@@ -22,6 +22,8 @@
     harness2-harness sync-keys            register a gateway key per harness
     harness2-harness run <id> <prompt>    one headless run through the gateway
     harness2-harness bench <id> <prompt>  one task, writing a substrate run directory
+    harness2-harness route <task>         which harness a task would go to, and why
+    harness2-harness do <task>            pick a harness, run it, fall back if it fails
     harness2-harness trace <id>           where that harness's own log lives
 
 `apply` and `sync-keys` change files on disk; a config write keeps a timestamped
@@ -31,6 +33,7 @@ backup beside the original.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -47,6 +50,27 @@ def _pick(harness_id: str) -> registry.HarnessSpec:
         return registry.load_one(harness_id)
     except KeyError as exc:
         raise SystemExit(f"{exc}") from None
+
+
+def _resolve_model(spec: registry.HarnessSpec, override: str) -> str:
+    """The concrete model id to run `spec` with.
+
+    `allowed_models` holds pattern *groups* (`qwen*`, `claude-*`), so the first
+    entry is a pattern and not a usable id. A manifest may name one concrete
+    `default_model` to avoid asking the gateway; otherwise the group is resolved
+    against the live catalog and the first real id wins.
+    """
+    if override:
+        return override
+    if spec.default_model:
+        return spec.default_model
+    if not spec.allowed_models:
+        return ""
+    if not ninerouter.enabled():
+        # No gateway to ask; a bare pattern would be sent as a model name and 404.
+        return spec.allowed_models[0]
+    matched = registry.match_models(spec, list(ninerouter.fetch_models()))
+    return matched[0] if matched else spec.allowed_models[0]
 
 
 def cmd_list(args) -> int:
@@ -163,7 +187,7 @@ def cmd_bench(args) -> int:
     from harness2.benchmarks import external_runner as ER
 
     spec = _pick(args.harness)
-    model = args.model or (spec.allowed_models[0] if spec.allowed_models else "")
+    model = _resolve_model(spec, args.model)
     run_dir = ER.run_one(
         harness=spec.id,
         run_id=args.run_id,
@@ -181,6 +205,89 @@ def cmd_bench(args) -> int:
         print(f"{spec.id}: exit {metrics['exit_code']} | delivered {metrics['delivered']}")
     print(f"run dir: {run_dir}")
     return 0
+
+
+def cmd_route(args) -> int:
+    """Show which harness a task would go to, and why. Runs nothing."""
+    decision = registry.route(args.task, _specs(), preferred=args.prefer or "")
+    print(f"{decision.spec.id}  ({decision.spec.label})")
+    print(f"  because  {decision.reason}")
+    if decision.matched:
+        print(f"  matched  {', '.join(decision.matched)}")
+    order = [s.id for s in registry.candidates(_specs()) if s.id != decision.spec.id]
+    if order:
+        print(f"  fallback {', '.join(order)}")
+    return 0
+
+
+def cmd_do(args) -> int:
+    """Give a task; pick a harness, run it, and fall back if it fails.
+
+    The task text decides the harness (see `route`), unless `--harness` names
+    one. A candidate that exits non-zero or delivers nothing is not a success,
+    so the next candidate is tried — the task is what matters, not which agent
+    ran it. Every attempt gets its own run directory.
+    """
+    from harness2.benchmarks import external_runner as ER
+
+    specs = _specs()
+    if args.harness:
+        first = registry.route(args.task, specs, preferred=args.harness)
+    else:
+        first = registry.route(args.task, specs)
+    chain = [first.spec] + [
+        s for s in registry.candidates(specs) if s.id != first.spec.id
+    ]
+    if args.no_fallback:
+        chain = chain[:1]
+
+    results_root = Path(args.results_root)
+    attempts: list[tuple[str, str]] = []
+    for spec in chain:
+        model = _resolve_model(spec, args.model)
+        run_id = f"{args.run_id}/{spec.id}"
+        print(f"→ {spec.id}  (model {model or '(profile default)'})", flush=True)
+        try:
+            run_dir = ER.run_one(
+                harness=spec.id,
+                run_id=run_id,
+                results_root=results_root,
+                task_dir=Path(args.task_dir) if args.task_dir else Path("/nonexistent"),
+                prompt=args.task,
+                model=model,
+                timeout=args.timeout,
+            )
+        except (ValueError, KeyError, OSError) as exc:
+            attempts.append((spec.id, f"could not start: {exc}"))
+            print(f"  {spec.id}: {exc}", file=sys.stderr)
+            continue
+
+        metrics = {}
+        meta = run_dir / "metrics.json"
+        if meta.is_file():
+            metrics = json.loads(meta.read_text(encoding="utf-8"))
+        delivered = metrics.get("delivered") or []
+        if metrics.get("exit_code") == 0 and delivered:
+            attempts.append((spec.id, f"delivered {delivered}"))
+            print(f"  ok — delivered {delivered}")
+            print(f"  run dir: {run_dir}")
+            print(f"  routed by: {first.reason}")
+            for hid, note in attempts[:-1]:
+                print(f"  (tried {hid}: {note})")
+            return 0
+        why = (
+            f"exit {metrics.get('exit_code')}"
+            if metrics
+            else "produced no metrics"
+        )
+        attempts.append((spec.id, why))
+        print(f"  {spec.id}: {why}", file=sys.stderr)
+
+    print("every harness failed:", file=sys.stderr)
+    for hid, note in attempts:
+        print(f"  {hid}: {note}", file=sys.stderr)
+    return 1
+
 
 
 def cmd_trace(args) -> int:
@@ -273,6 +380,25 @@ def main(argv=None) -> int:
     p.add_argument("--model", default="", help="default: the harness's first allowed model")
     p.add_argument("--timeout", type=int, default=3600)
     p.set_defaults(fn=cmd_bench)
+
+    p = sub.add_parser("route", help="which harness a task would go to, and why")
+    p.add_argument("task")
+    p.add_argument("--prefer", default="", help="force this harness if it is runnable")
+    p.set_defaults(fn=cmd_route)
+
+    p = sub.add_parser(
+        "do",
+        help="give a task: pick a harness, run it, fall back if it fails",
+    )
+    p.add_argument("task")
+    p.add_argument("--harness", default="", help="skip routing and use this harness first")
+    p.add_argument("--run-id", default="task", help="run directory name; the harness id is appended")
+    p.add_argument("--results-root", default="runs/do", help="where run directories are written")
+    p.add_argument("--task-dir", default="", help="copied into the workspace; optional")
+    p.add_argument("--model", default="", help="override the model for every attempt")
+    p.add_argument("--timeout", type=int, default=3600)
+    p.add_argument("--no-fallback", action="store_true", help="try only the chosen harness")
+    p.set_defaults(fn=cmd_do)
 
     args = parser.parse_args(argv)
     try:

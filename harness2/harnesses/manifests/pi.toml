@@ -20,5 +20,10 @@ skills_dir = "~/.pi/agent/skills"
 # Group assignment: pi is the local-model harness.
 allowed_models = ["All", "Safe", "Coding", "General", "Fast", "Reasoning", "Vision", "local"]
 
+# Routing: which task words suit pi. See `route` in registry.py.
+routes = ["code", "coding", "debug", "bug", "refactor", "test", "compile", "regex"]
+default_model = "All"
+priority = 10
+
 [env]
 PI_CODING_AGENT_DIR = "~/.pi/agent"

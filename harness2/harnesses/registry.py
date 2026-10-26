@@ -23,6 +23,7 @@ and which model groups it may see.
 from __future__ import annotations
 
 import fnmatch
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +49,13 @@ class HarnessSpec:
     can_run: bool = True
     env: dict[str, str] = field(default_factory=dict)
     adapter: str = ""
+    # Routing: which task words this harness is good for, and how it ranks.
+    # `routes` is matched case-insensitively against the task text; a harness
+    # with no match still runs when a task matches nothing (see `route`).
+    routes: tuple[str, ...] = ()
+    priority: int = 0
+    default: bool = False
+    default_model: str = ""
 
     def installed(self) -> bool:
         """Whether this harness is actually present on this machine."""
@@ -103,6 +111,10 @@ def _from_dict(raw: dict, *, source: Path) -> HarnessSpec:
         can_run=bool(raw.get("can_run", True)),
         env={str(k): str(v) for k, v in (raw.get("env") or {}).items()},
         adapter=str(raw.get("adapter", raw["config_format"])),
+        routes=tuple(str(r).lower() for r in _paths(raw, "routes")),
+        priority=int(raw.get("priority", 0)),
+        default=bool(raw.get("default", False)),
+        default_model=str(raw.get("default_model", "")),
     )
 
 
@@ -138,3 +150,70 @@ def match_models(spec: HarnessSpec, model_ids: list[str]) -> list[str]:
         for mid in model_ids
         if any(fnmatch.fnmatch(mid, pat) for pat in spec.allowed_models)
     ]
+
+
+@dataclass(frozen=True)
+class Route:
+    """One harness chosen for a task, and the reason it won."""
+
+    spec: HarnessSpec
+    matched: tuple[str, ...]
+    reason: str
+
+def _mentions(text: str, word: str) -> bool:
+    """Whether `word` appears in `text` as a whole word.
+
+    A substring test would fire `git` inside `digital` and `web` inside `website`;
+    the boundary check is what makes a keyword list trustworthy.
+    """
+    return re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text, re.IGNORECASE) is not None
+
+def candidates(specs: list[HarnessSpec]) -> list[HarnessSpec]:
+    """Runnable harnesses, best first: more keyword hits, then higher priority.
+
+    A harness that is not installed or has no headless mode cannot run and is
+    left out entirely, so a task is never routed to something that would fail
+    for a reason the router could have seen.
+    """
+    runnable = [s for s in specs if s.installed() and s.can_run]
+    return sorted(runnable, key=lambda s: (-s.priority, s.id))
+
+def route(task: str, specs: list[HarnessSpec], *, preferred: str = "") -> Route:
+    """Pick the harness for `task`.
+
+    Order: an explicit `preferred` id, then the harness whose `routes` words the
+    task mentions most (ties by `priority`, then id). A task matching nothing
+    falls back to the harness marked `default`, and failing that to the first
+    candidate — routing always answers, it never refuses.
+    """
+    pool = candidates(specs)
+    if not pool:
+        raise KeyError("no runnable harness: none is installed with a headless mode")
+    if preferred:
+        chosen = next((s for s in pool if s.id == preferred), None)
+        if chosen is None:
+            known = ", ".join(s.id for s in pool)
+            raise KeyError(f"harness {preferred!r} is not runnable; runnable: {known}")
+        return Route(chosen, (), f"explicitly requested ({preferred})")
+
+    scored: list[tuple[int, HarnessSpec, tuple[str, ...]]] = []
+    for spec in pool:
+        hits = tuple(w for w in spec.routes if _mentions(task, w))
+        if hits:
+            scored.append((len(hits), spec, hits))
+    if scored:
+        best = max(scored, key=lambda row: (row[0], row[1].priority))
+        top = [row for row in scored if row[0] == best[0]]
+        if len(top) > 1:
+            winner = max(top, key=lambda row: (row[1].priority, row[1].id))[1]
+            hits = next(row[2] for row in top if row[1] is winner)
+            others = ", ".join(sorted(r[1].id for r in top if r[1] is not winner))
+            reason = f"matched {', '.join(hits)} (beat {others} on priority)"
+        else:
+            winner, hits = best[1], best[2]
+            reason = f"matched {', '.join(hits)}"
+        return Route(winner, tuple(hits), reason)
+
+    fallback = next((s for s in pool if s.default), pool[0])
+    why = "declared default" if fallback.default else "first of the runnable harnesses"
+    return Route(fallback, (), f"no keyword matched; {why}")

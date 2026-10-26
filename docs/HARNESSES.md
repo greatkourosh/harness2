@@ -170,7 +170,62 @@ Two limits worth knowing:
 - `HARNESS2_9ROUTER_ADMIN_PASSWORD` is needed for the key and settings APIs. It
   is the dashboard password and is never used for a model call.
 
-## Running a task through a harness
+## Routing a task to a harness
+
+`do` takes a task, decides which harness should run it, runs it, and falls back
+if that harness fails:
+
+```bash
+harness2-harness do "fix the auth bug in parser.py"
+harness2-harness do "draft a legal memo about this contract" --task-dir ./matter
+```
+
+```
+→ pi  (model 9router/All)
+  ok — delivered ['answer.txt']
+  run dir: runs/do/t1/pi
+  routed by: matched bug
+```
+
+`route` shows the decision without running anything:
+
+```bash
+harness2-harness route "translate these support emails in bulk"
+```
+
+### How the decision is made
+
+Each manifest declares the task words it is good for, and its rank:
+
+```toml
+routes = ["code", "coding", "debug", "bug", "refactor", "test"]
+priority = 10
+default = false          # the fallback when nothing matches
+```
+
+The router scores every **runnable** harness (installed, with a headless mode)
+by how many of its `routes` words the task mentions, breaks ties on `priority`,
+and picks the winner. An unmatched task goes to the harness marked `default`,
+or failing that to the highest-priority candidate — routing always answers.
+
+Keywords match **whole words**. A substring test would fire `git` inside
+`digital` and `web` inside `website`, which is what makes a keyword list
+untrustworthy; the boundary check is why it does not.
+
+Override the decision with `--harness pi`, or pin a model with `--model`.
+
+### Falling back
+
+A harness that exits non-zero or delivers nothing is not a success, so `do`
+tries the next candidate in priority order — the task is what matters, not
+which agent ran it. Every attempt gets its own run directory
+(`<results-root>/<run-id>/<harness-id>/`), and the attempts are listed at the
+end. `--no-fallback` runs only the chosen harness.
+
+Fallback costs a full run per attempt, and a slow gateway can make each one
+expensive; pass `--no-fallback` when you want a single, predictable call.
+
+## Running a task through a named harness
 
 `bench` runs one task through a registered harness and writes a *substrate run
 directory* — the same layout the OpenCode and Codex runners produce, so a

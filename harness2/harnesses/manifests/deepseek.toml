@@ -32,5 +32,10 @@ can_run = true
 # Group assignment: the Qwen/GLM/open-weight group.
 allowed_models = ["qwen*", "glm*", "deepseek*", "local"]
 
+# Routing: the cheap/long-context lane.
+routes = ["bulk", "batch", "extract", "translate", "triage", "scan", "chunk"]
+default_model = "local"
+priority = 1
+
 [env]
 DSH_HOME = "~/.dsh"

@@ -261,5 +261,104 @@ class SubstrateTests(unittest.TestCase):
                 substrate.materialise(Path(tmp), bench, {})
 
 
+class RoutingTests(unittest.TestCase):
+    """Choosing a harness from the task text."""
+
+    def _specs(self) -> list:
+        """Shipped manifests with a headless mode, so the router has a full pool.
+
+        claude-desktop declares `can_run = false` and is deliberately left that
+        way: it is not a routing target.
+        """
+        return [
+            type(spec)(**{**spec.__dict__, "can_run": True})
+            for spec in registry.load_all()
+            if spec.can_run
+        ]
+
+    def test_keyword_picks_the_specialist_not_the_default(self):
+        decision = registry.route("fix the auth bug in parser.py", self._specs())
+        self.assertEqual(decision.spec.id, "pi")
+        self.assertIn("bug", decision.matched)
+
+    def test_legal_task_goes_to_the_document_harness(self):
+        decision = registry.route("draft a legal memo about this contract", self._specs())
+        self.assertEqual(decision.spec.id, "claude-code")
+
+    def test_bulk_task_goes_to_the_cheap_lane(self):
+        decision = registry.route("translate these support emails in bulk", self._specs())
+        self.assertEqual(decision.spec.id, "deepseek")
+
+    def test_unmatched_task_falls_to_the_declared_default(self):
+        decision = registry.route("hello there", self._specs())
+        self.assertTrue(decision.spec.default)
+        self.assertEqual(decision.matched, ())
+
+    def test_keywords_match_whole_words_only(self):
+        """'digital' must not fire a `debug`-style word, nor 'website' a `web`."""
+        spec = self._specs()[0]
+        tuned = type(spec)(**{**spec.__dict__, "id": "t", "routes": ("web",), "default": False})
+        decision = registry.route("the website is down", [tuned])
+        # No whole-word 'web' in 'website', so nothing matched.
+        self.assertEqual(decision.matched, ())
+
+    def test_more_keyword_hits_beat_priority(self):
+        a = SimpleNamespace(
+            id="a", routes=("code", "test"), priority=100, default=False,
+            installed=lambda: True, can_run=True,
+        )
+        b = SimpleNamespace(
+            id="b", routes=("code",), priority=1, default=False,
+            installed=lambda: True, can_run=True,
+        )
+        decision = registry.route("write a test for this code", [a, b])
+        self.assertEqual(decision.spec.id, "a")
+
+    def test_priority_breaks_a_tie_on_equal_hits(self):
+        lo = SimpleNamespace(
+            id="lo", routes=("code",), priority=1, default=False,
+            installed=lambda: True, can_run=True,
+        )
+        hi = SimpleNamespace(
+            id="hi", routes=("code",), priority=9, default=False,
+            installed=lambda: True, can_run=True,
+        )
+        decision = registry.route("fix the code", [lo, hi])
+        self.assertEqual(decision.spec.id, "hi")
+
+    def test_preferred_harness_wins_over_keywords(self):
+        decision = registry.route("fix the bug", self._specs(), preferred="deepseek")
+        self.assertEqual(decision.spec.id, "deepseek")
+        self.assertIn("explicitly", decision.reason)
+
+    def test_a_non_runnable_harness_is_never_routed_to(self):
+        """An un-runnable harness is excluded; with no others, routing refuses."""
+        spec = registry.load_one("pi")
+        broken = type(spec)(**{**spec.__dict__, "can_run": False})
+        with self.assertRaises(KeyError):
+            registry.route("fix the code bug", [broken])
+
+    def test_candidates_rank_priority_then_id(self):
+        ids = [s.id for s in registry.candidates(self._specs())]
+        self.assertEqual(ids[0], "claude-code")  # priority 20
+        self.assertNotIn("claude-desktop", ids)  # can_run is False in its manifest
+
+    def test_default_model_is_concrete_not_a_pattern(self):
+        """`allowed_models` holds globs; a glob sent as a model id 404s."""
+        from harness2.cli.harness import _resolve_model
+
+        for spec in registry.load_all():
+            model = _resolve_model(spec, "")
+            self.assertNotIn(
+                "*", model, f"{spec.id}: default_model must name one real model"
+            )
+
+    def test_override_beats_the_default(self):
+        from harness2.cli.harness import _resolve_model
+
+        spec = registry.load_one("pi")
+        self.assertEqual(_resolve_model(spec, "some/explicit-id"), "some/explicit-id")
+
+
 if __name__ == "__main__":
     unittest.main()
