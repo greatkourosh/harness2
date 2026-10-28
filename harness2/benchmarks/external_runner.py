@@ -42,6 +42,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -139,18 +140,33 @@ def run_one(
     started = time.time()
     with session.open("w", encoding="utf-8") as out, stderr_log.open("w", encoding="utf-8") as err:
         try:
-            proc = subprocess.run(
+            # start_new_session puts the harness in a process group of its own so
+            # a cancel can kill the whole tree (the CLI plus anything it spawns)
+            # without touching this process. The pid is recorded so the panel can
+            # find that group again from another thread.
+            proc = subprocess.Popen(
                 argv,
                 cwd=str(workspace),
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=err,
-                timeout=timeout,
+                start_new_session=True,
             )
-            code = proc.returncode
-        except subprocess.TimeoutExpired:
-            code = 124
+            (run_dir / "pid").write_text(str(proc.pid), encoding="utf-8")
+            try:
+                code = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Give it SIGTERM, then reap. `wait` again briefly: a killed child
+                # is a zombie until reaped, and without this the pid file would
+                # point at a process the panel can no longer signal.
+                _kill_group(proc.pid, signal.SIGTERM)
+                try:
+                    code = proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    _kill_group(proc.pid, signal.SIGKILL)
+                    code = proc.wait(timeout=30)
+                code = 124
         except OSError as exc:
             code = 127
             err.write(f"could not exec {argv[0]}: {exc}\n")
@@ -178,6 +194,76 @@ def run_one(
     # Written last: its presence is the completion mark readers check.
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     return run_dir
+
+def _kill_group(pid: int, sig: int) -> bool:
+    """Signal the process group led by `pid`. True when a signal was delivered.
+
+    The harness was started with `start_new_session=True`, so its pid is also
+    its process-group id. SIGTERM first: the CLIs here flush their session log
+    and exit on it, where SIGKILL would leave a truncated stream.
+    """
+    try:
+        os.killpg(os.getpgid(pid), sig)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+def kill_run(run_dir: Path, *, force: bool = False) -> bool:
+    """Stop the harness a run directory belongs to. False when nothing was running.
+
+    Reads the pid the runner recorded, so this works from any process — the
+    panel cancels a task from an HTTP handler while the run is in another
+    thread. The transcript is written before the process ends only if the CLI
+    flushes on SIGTERM, which the ones here do.
+    """
+    pid_file = Path(run_dir) / "pid"
+    if not pid_file.is_file():
+        return False
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+
+    if not _kill_group(pid, signal.SIGTERM if not force else signal.SIGKILL):
+        return False
+    if force:
+        return True
+    # Give it a moment to exit cleanly, then insist.
+    for _ in range(30):
+        time.sleep(0.1)
+        if not _alive(pid):
+            return True
+    _kill_group(pid, signal.SIGKILL)
+    return True
+
+def _alive(pid: int) -> bool:
+    """Whether `pid` is a running process.
+
+    A killed child stays visible in /proc as a zombie until its parent reaps it,
+    and the parent here is the caller's own thread, which is busy polling. A
+    zombie is dead for our purposes — reporting it alive would make the caller
+    wait out its full grace period and then send a SIGKILL to nothing.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            fields = handle.read().rsplit(b") ", 1)
+        if len(fields) == 2 and fields[1][:1] == b"Z":
+            return False
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        pass
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but belongs to another user; it is alive.
+        return True
+    except OSError:
+        return False
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)

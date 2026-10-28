@@ -65,6 +65,7 @@ class Job:
     state: str = "queued"  # queued | running | done | failed
     exit_code: int | None = None
     delivered: list[str] = field(default_factory=list)
+    cancelled: bool = False
     error: str = ""
     started: str = ""
     finished: str = ""
@@ -83,6 +84,7 @@ class Job:
             "state": self.state,
             "exit_code": self.exit_code,
             "delivered": list(self.delivered),
+            "cancelled": self.cancelled,
             "error": self.error,
             "started": self.started,
             "finished": self.finished,
@@ -163,19 +165,38 @@ class JobStore:
         return job.view()
 
     def cancel(self, job_id: str) -> bool:
-        """Mark a job failed so the UI stops waiting on it.
+        """Stop a running job: kill its harness process group, then mark it failed.
 
-        The harness process itself is not killed: it was started by
-        `external_runner` in its own session and the store has no handle to it.
-        The exit status seen here is unknown, which is why the job is left
-        `failed` with that stated rather than silently reported as cancelled.
+        The runner records the harness pid in the run directory and starts it in
+        its own session, so the group can be signalled from here even though the
+        process belongs to another thread. SIGTERM goes first — the CLIs flush
+        their session transcript on it, where SIGKILL would truncate the stream.
         """
+        from ..benchmarks.external_runner import kill_run
+
         with self._lock:
             job = self._jobs.get(job_id)
-            if job is None or job.state not in ("queued", "running"):
+            if job is None or job.state not in ("queued", "running") or job.cancelled:
                 return False
-            job.state = "failed"
-            job.error = "abandoned from the panel; the harness process was not killed"
+            run_dir = job.run_dir
+            # Claim it before killing. `kill_run` waits for the process to die,
+            # and during that wait the run thread finishes and marks the job
+            # `failed` itself; a second state check afterwards would then see
+            # `failed` and report the cancel as a no-op even though it worked.
+            job.cancelled = True
+
+        killed = False
+        if run_dir is not None:
+            killed = kill_run(run_dir)
+
+        with self._lock:
+            if job.state in ("queued", "running"):
+                job.state = "failed"
+            job.error = (
+                "cancelled from the panel; the harness process was stopped"
+                if killed
+                else "cancelled from the panel; no harness process was running"
+            )
             job.finished = _now()
             return True
 
@@ -267,6 +288,13 @@ class JobStore:
         exit_code = metrics.get("exit_code")
         ok = exit_code == 0 and bool(delivered)
         with self._lock:
+            # A cancel already decided this job's outcome, and it may have done
+            # so while this thread was still unwinding: the run directory can
+            # hold files written before the kill. Letting the success path run
+            # would report `done` for work the operator stopped, so a cancelled
+            # job is left as the cancel wrote it.
+            if job.cancelled:
+                return
             job.exit_code = exit_code
             job.delivered = list(delivered)
             job.state = "done" if ok else "failed"

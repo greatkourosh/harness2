@@ -133,6 +133,31 @@ Two layers, and only one of them actually isolates:
   served `Safe` with HTTP 200, so do not rely on it. It is written because the
   intent is worth recording and a later 9router may honour it.
 
+## Images and vision
+
+A task with an image works, but **which combo you send it to decides whether the
+image survives**. Verified against the gateway on 2026-10-26 with a rendered
+digit:
+
+| Combo | Routed to | Read the image? |
+|---|---|---|
+| `claude-sonnet-4-6` | `deepseek-ai/DeepSeek-V4.1-Flash` | yes |
+| `General` | `gemini-3.8-flash-n` | yes |
+| `Safe` | `claude-opus-4-6-thinking` | **no** — "no image attached" |
+| `Reasoning` | a Cloudflare-hosted Qwen distill | **no** |
+| `All`, `Coding`, `Vision` | (timed out at 45s) | unknown |
+
+Both wire protocols carry the image: the Anthropic Messages shape
+(`/v1/messages`, which claude code and claude desktop use) and the OpenAI shape
+(`/v1/chat/completions`) each returned the right digit. So the protocol is not
+the variable — the *route the combo lands on* is. A combo resolves over many
+upstreams, and the one that answers may not accept image content.
+
+The practical consequence: if a task has an image, name a route known to work
+(`9router/claude-sonnet-4-6`) rather than leaving it to a combo such as `Safe`
+or `Reasoning`, and do not assume that a combo which works for text works for an
+image.
+
 ## Reading the gateway catalog
 
 `/v1/models` — the model API's own list — renders the entire upstream catalog and

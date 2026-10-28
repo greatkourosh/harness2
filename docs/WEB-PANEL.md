@@ -75,12 +75,17 @@ curl -s -X POST http://127.0.0.1:8090/api/tasks \
   -d '{"task":"find the failing test","project":"myrepo"}'
 ```
 
+## Cancel
+
+Cancel stops the task. The runner starts each harness in a session of its own
+and records the pid in the run directory, so the panel signals that process
+group — SIGTERM first, since these CLIs flush their session transcript on it,
+then SIGKILL if it has not gone. A cancelled task stays `failed`; the run thread
+cannot flip it back to `done` even if files landed before the kill, because
+reporting success for work you stopped is worse than reporting nothing.
+
 ## Limits worth knowing
 
-- **`cancel` does not kill the harness process.** The runner starts it in its
-  own session and the store holds no handle, so cancel marks the task failed and
-  says so. The process runs to completion or its own timeout; its output still
-  lands in the run directory.
 - **No authentication.** It binds to loopback by default. `--host 0.0.0.0`
   exposes it to the network and prints that warning; only do it on a network you
   trust, because anyone who can reach it can start a task against any listed

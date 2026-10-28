@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from harness2.benchmarks import external_runner
 from harness2.web import jobs
 
 
@@ -201,6 +202,90 @@ class JobStoreTests(unittest.TestCase):
                     time.sleep(0.02)
             self.assertTrue(store.forget(job["id"]))
             self.assertIsNone(store.get(job["id"]))
+
+    def test_cancel_actually_kills_the_harness_process(self):
+        """Cancel must stop the process, not only mark the job failed.
+
+        The harness is started in its own session with its pid recorded, so the
+        panel can signal the group from the HTTP thread. A cancel that reports
+        success while the process keeps spending quota is the failure this
+        guards.
+        """
+        import subprocess
+        import time
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "proj").mkdir()
+        store = self._store(root / "runs")
+        seen: dict = {}
+
+        def fake_run_one(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            # A stand-in harness: a real process in its own session, like the runner.
+            proc = subprocess.Popen(["sleep", "120"], start_new_session=True)
+            (run_dir / "pid").write_text(str(proc.pid), encoding="utf-8")
+            seen["pid"] = proc.pid
+            time.sleep(30)
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=fake_run_one
+        ):
+            job = store.submit("do something slow", "proj")
+            for _ in range(200):
+                if store.get(job["id"])["state"] == "running" and "pid" in seen:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(external_runner._alive(seen["pid"]), "stand-in should be running")
+
+            self.assertTrue(store.cancel(job["id"]))
+            time.sleep(0.3)
+
+            self.assertFalse(
+                external_runner._alive(seen["pid"]),
+                "cancel must kill the harness process, not just mark the job",
+            )
+            final = store.get(job["id"])
+            self.assertEqual(final["state"], "failed")
+            self.assertTrue(final["cancelled"])
+            self.assertIn("stopped", final["error"])
+            subprocess.run(["pkill", "-f", "sleep 120"], check=False)
+
+    def test_a_cancelled_job_is_not_flipped_back_to_done(self):
+        """The run thread must not report success for work the operator stopped."""
+        import time
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "proj").mkdir()
+        store = self._store(root / "runs")
+
+        def slow_then_success(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            time.sleep(0.4)  # long enough for the cancel below to land first
+            (run_dir / "metrics.json").write_text(
+                json.dumps({"exit_code": 0, "delivered": ["late.txt"]}), encoding="utf-8"
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=slow_then_success
+        ):
+            job = store.submit("will be cancelled", "proj")
+            for _ in range(100):
+                if store.get(job["id"])["state"] == "running":
+                    break
+                time.sleep(0.02)
+            store.cancel(job["id"])
+            time.sleep(0.6)  # let the run thread finish and try to write `done`
+            final = store.get(job["id"])
+        self.assertEqual(final["state"], "failed", "a cancelled job must stay failed")
+        self.assertTrue(final["cancelled"])
 
 if __name__ == "__main__":
     unittest.main()

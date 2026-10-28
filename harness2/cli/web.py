@@ -149,6 +149,13 @@ async function poll() {
 
 window.pick = id => { selected = id; poll(); };
 
+window.act = async (id, what) => {
+  if (what === 'cancel' && !confirm('Stop this task? The harness process is killed.')) return;
+  await fetch(`/api/tasks/${id}/${what}`, {method:'POST'});
+  if (what === 'forget') selected = null;
+  poll();
+};
+
 async function detail(id) {
   const [j, log] = await Promise.all([sjson('/api/tasks/'+id), sjson('/api/tasks/'+id+'/log')]);
   if (!j || j.error === 'not found') return;
@@ -166,6 +173,9 @@ async function detail(id) {
      ${j.error?`<dt>error</dt><dd style="color:var(--bad)">${esc(j.error)}</dd>`:''}
      ${j.run_dir?`<dt>run dir</dt><dd>${esc(j.run_dir)}</dd>`:''}
    </dl>
+   ${(j.state==='running'||j.state==='queued')?
+     `<button class="ghost" onclick="act('${j.id}','cancel')">Cancel (stops the harness)</button>`:
+     `<button class="ghost" onclick="act('${j.id}','forget')">Remove from list</button>`}
    ${files?`<h3 style="font-size:13px">delivered</h3><ul>${files}</ul>`:''}
    <h3 style="font-size:13px">output log</h3>
    <pre>${esc(log || '—')}</pre>`;
