@@ -210,7 +210,14 @@ def _check_identity(adapter, args, namespace_dir: Path) -> None:
     """Prevent a resumed run or library from silently mixing models or task partitions."""
     identity = {
         "method_version": config.METHOD_VERSION,
-        "executor": config.SOLVER_MODEL_OC if args.substrate == "oc" else config.SOLVER_MODEL_CX,
+        # The adapter resolved this cell's solver model: the manifest default for an
+        # external harness, the configured per-framework model for oc/cx. Identical to
+        # the old ternary for every cell that existed before, so a run directory written
+        # then still matches -- do not ADD a key here, or every existing experiment is
+        # rejected as a different identity by the check below.
+        "executor": getattr(adapter, "model", "") or (
+            config.SOLVER_MODEL_OC if args.substrate == "oc" else config.SOLVER_MODEL_CX
+        ),
         "improver": config.IMPROVER_MODEL,
         "judge": config.JUDGE_MODEL,
         "project": config.VERTEX_PROJECT,

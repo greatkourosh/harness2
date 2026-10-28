@@ -283,12 +283,39 @@ codex and claude code all read, so one surface covers every external harness.
 
 Two things worth knowing about this path:
 
-- **`--substrate <harness-id>` is deliberately NOT accepted by the benchmark
-  runners.** `lab.py`, `jobbench.py` and `workbuddy.py` each hardcode a two-way
-  `oc`/`cx` split, owning a launcher body, a base tree and a result path per
-  substrate. An external id added to `SUBSTRATES` would silently construct a
-  `CodexSubstrate` and run the wrong agent. External harnesses go through
-  `harness2-harness bench` instead.
+- **`--substrate <harness-id>` is accepted by the LAB benchmark only.**
+  `harness2-run --bench lab --substrate claude-code` (and `pi`, `deepseek`, …)
+  runs a registered harness as a real LAB cell: it is scored by LAB's own judge
+  and appears in reports and namespaces like the in-tree `oc`/`cx` cells.
+
+  It works because an external harness is codex-shaped to every consumer that
+  branches on the surface (`ExternalCliSubstrate.surface()` returns the same
+  `AGENTS.md` surface `cx` uses), so `lab.py` shares one launcher body, base
+  tree and result path with the cx cell and differs only in the argv — which
+  comes from the harness manifest. A manifest `default_model` is what the run
+  uses, so no gateway round trip is needed to resolve it.
+
+  `jobbench.py` and `workbuddy.py` still hardcode the two-way `oc`/`cx` split
+  and refuse an external id with a message saying so: jb's run directories and
+  `TASK_IDS`-driven launchers need a bridge that does not exist yet, and wb
+  resolves a Harbor harness *slug* against its own config tree and runs trials
+  in Docker, where a foreign CLI has none. Do not add an id to `SUBSTRATES` to
+  "make it work" — an id accepted there would silently build a `CodexSubstrate`.
+
+  The doc-reader default is podman sandbox mode; on a host with only Docker,
+  pass `LAB_DOC_PARSER=host` / `--doc-parser host` or the agent's binary-document
+  reads return noise.
+
+  **Known ceiling: an external harness's trajectory and token metrics are empty
+  unless it emits the codex JSON event shape.** The capture is the harness's own
+  stdout, and the shared renderer only understands codex's JSONL; `claude -p`
+  prints prose, so its `metrics.json` carries a `metrics_note` saying the counts
+  are absent and its trajectory renders as "(no parseable events)". Grading is
+  unaffected — deliverables are read from `output/`, not from the stream — but
+  the improver and selector, which read trajectories, are blind for such a
+  harness. Closing this means either asking the harness for JSON output in its
+  manifest's `headless` (which also changes what `harness2-harness bench` prints)
+  or teaching the renderer that harness's shape. Not done yet, on purpose.
 - **A harness needs `--permission-mode acceptEdits` (or equivalent) to deliver
   anything headlessly.** With the default mode `claude -p` holds every file
   write for approval, has nobody to ask, and reports success having written

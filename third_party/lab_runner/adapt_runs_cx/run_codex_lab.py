@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Run one LAB task through the Codex CLI, the codex twin of opencode/run_opencode.py.
+"""Run one LAB task through a registered external harness, or the Codex CLI.
 
-Writes config.json, codex_session.jsonl, output/ and metrics.json last as the completion
-record, so a dead model chain is never cached as a finished rollout.
+With no --harness-id this is the codex cell: codex_session.jsonl, config.json, output/
+and metrics.json last as the completion record, so a dead model chain is never cached
+as a finished rollout.
+
+With --harness-id it drives ANY registered harness (see harness2-harness) by running the
+argv the caller built from the harness manifest, in the same LAB workspace. The workspace,
+document staging, read_doc.py install, grading copy and metrics layout are identical; only
+the argv, the temp config home, the session filename and the per-harness environment differ.
 """
 
 from __future__ import annotations
@@ -35,6 +41,13 @@ VERTEX_PROXY_KEY = os.environ.get("VERTEX_PROXY_KEY", "")
 DEFAULT_MODEL = os.environ.get("ADAPT_LABCX_MODEL", "")
 
 READ_DOC = REPO / "opencode" / "scripts" / "read_doc.py"
+
+# The adapter builds an external harness's argv with ExternalCliSubstrate.argv, which
+# substitutes the manifest's {prompt} slot. The prompt embeds the workspace's ABSOLUTE
+# paths, and only this runner knows the workspace (it is a per-run scratch dir), so the
+# adapter passes this sentinel in the prompt slot and the runner substitutes the real
+# prompt here. Keeping the substitution here means argv placement stays in ONE place.
+PROMPT_SENTINEL = "@@HARNESS2_PROMPT@@"
 
 # The codex_root surface; sub_agents/ never reaches the workspace (c5 is gated off on
 # this substrate).
@@ -226,7 +239,21 @@ def main(args) -> int:
         return 0
     if not args.task or not args.run_id:
         raise SystemExit("--task and --run-id are required (or use --reap-hours)")
-    if not CODEX_BIN.is_file():
+
+    # An external harness brings its own argv (built from its manifest by the adapter)
+    # and reaches the gateway through its own already-applied config, so neither the
+    # codex binary nor a throwaway CODEX_HOME is involved.
+    harness_id = (args.harness_id or "codex").strip()
+    harness_argv = json.loads(args.harness_argv_json) if args.harness_argv_json else None
+    harness_env = json.loads(args.harness_env_json) if args.harness_env_json else {}
+    if harness_argv is not None and not (
+        isinstance(harness_argv, list)
+        and harness_argv
+        and all(isinstance(a, str) for a in harness_argv)
+    ):
+        raise SystemExit("--harness-argv-json must be a non-empty JSON array of strings")
+    external = harness_argv is not None
+    if not external and not CODEX_BIN.is_file():
         raise SystemExit(f"codex binary not found: {CODEX_BIN} (ADAPT_LABCX_CODEX_BIN)")
 
     label = args.run_id.replace("/", "__")
@@ -256,56 +283,90 @@ def main(args) -> int:
         harness_dir = Path(args.harness_dir).resolve() if args.harness_dir else None
         installed = install_harness(ws, harness_dir)
 
-        codex_home.mkdir(parents=True)
-        (codex_home / "config.toml").write_text(
-            CONFIG_TOML_TEMPLATE.format(model=args.model, base_url=BASE_URL, workspace=ws),
-            encoding="utf-8")
+        if external:
+            config = {
+                "runner": harness_id,
+                "harness_argv": harness_argv,
+                "model": args.model,
+                "task": args.task,
+                "run_id": args.run_id,
+                "timeout": args.timeout,
+                "harness_dir": str(harness_dir) if harness_dir else None,
+                "harness_files": installed,
+                "doc_parser": args.doc_parser,
+                "workspace": str(ws),
+                "started_at": started,
+            }
+            (run_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
 
-        config = {
-            "runner": "codex",
-            "codex_bin": str(CODEX_BIN),
-            "codex_version": "codex-cli 0.144.6",
-            "model": args.model,
-            "model_chain": f"codex -> {BASE_URL} (Responses API)",
-            "reasoning_effort": args.reasoning_effort,
-            "task": args.task,
-            "run_id": args.run_id,
-            "timeout": args.timeout,
-            "harness_dir": str(harness_dir) if harness_dir else None,
-            "harness_files": installed,
-            "doc_parser": args.doc_parser,
-            "workspace": str(ws),
-            "codex_home": str(codex_home),
-            "started_at": started,
-        }
-        (run_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+            env = os.environ.copy()
+            env.pop("XDG_DATA_HOME", None)   # read_doc.py sandbox mode needs podman's store
+            env.update(harness_env)
+            env.update({
+                "LAB_DOC_PARSER": args.doc_parser,
+                "LAB_BENCH_ROOT": str(REPO),
+            })
+            if args.model_flag:
+                env["HARNESS2_MODEL"] = args.model
+            built_prompt = build_prompt(args.task, ws)
+            cmd = [
+                "timeout", "--kill-after=30s", str(int(max(60, args.timeout))),
+                *(built_prompt if a == PROMPT_SENTINEL else a for a in harness_argv),
+            ]
+            session_path = run_dir / f"{harness_id}_session.jsonl"
+            stderr_path = run_dir / f"{harness_id}_stderr.log"
+        else:
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                CONFIG_TOML_TEMPLATE.format(model=args.model, base_url=BASE_URL, workspace=ws),
+                encoding="utf-8")
 
-        env = os.environ.copy()
-        env.pop("OPENAI_BASE_URL", None)     # would flip codex auth validation; unused anyway
-        env.pop("XDG_DATA_HOME", None)       # read_doc.py sandbox mode needs podman's store
-        env.update({
-            "CODEX_HOME": str(codex_home),
-            "VERTEX_PROXY_KEY": VERTEX_PROXY_KEY,
-            "LAB_DOC_PARSER": args.doc_parser,
-            "LAB_BENCH_ROOT": str(REPO),
-        })
-        cmd = [
-            "timeout", "--kill-after=30s", str(int(max(60, args.timeout))),
-            str(CODEX_BIN), "exec", build_prompt(args.task, ws),
-            "--model", args.model,
-            "-c", f'model_reasoning_effort="{args.reasoning_effort}"',
-            "--skip-git-repo-check",
-            "--dangerously-bypass-approvals-and-sandbox",
-            # without this flag .codex/hooks.json is silently skipped
-            "--dangerously-bypass-hook-trust",
-            "--ephemeral",
-            "--json",
-            "-C", str(ws),
-            "--add-dir", str(ws),
-        ]
-        session_path = run_dir / "codex_session.jsonl"
+            config = {
+                "runner": "codex",
+                "codex_bin": str(CODEX_BIN),
+                "codex_version": "codex-cli 0.144.6",
+                "model": args.model,
+                "model_chain": f"codex -> {BASE_URL} (Responses API)",
+                "reasoning_effort": args.reasoning_effort,
+                "task": args.task,
+                "run_id": args.run_id,
+                "timeout": args.timeout,
+                "harness_dir": str(harness_dir) if harness_dir else None,
+                "harness_files": installed,
+                "doc_parser": args.doc_parser,
+                "workspace": str(ws),
+                "codex_home": str(codex_home),
+                "started_at": started,
+            }
+            (run_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+            env = os.environ.copy()
+            env.pop("OPENAI_BASE_URL", None)     # would flip codex auth validation; unused anyway
+            env.pop("XDG_DATA_HOME", None)       # read_doc.py sandbox mode needs podman's store
+            env.update({
+                "CODEX_HOME": str(codex_home),
+                "VERTEX_PROXY_KEY": VERTEX_PROXY_KEY,
+                "LAB_DOC_PARSER": args.doc_parser,
+                "LAB_BENCH_ROOT": str(REPO),
+            })
+            cmd = [
+                "timeout", "--kill-after=30s", str(int(max(60, args.timeout))),
+                str(CODEX_BIN), "exec", build_prompt(args.task, ws),
+                "--model", args.model,
+                "-c", f'model_reasoning_effort="{args.reasoning_effort}"',
+                "--skip-git-repo-check",
+                "--dangerously-bypass-approvals-and-sandbox",
+                # without this flag .codex/hooks.json is silently skipped
+                "--dangerously-bypass-hook-trust",
+                "--ephemeral",
+                "--json",
+                "-C", str(ws),
+                "--add-dir", str(ws),
+            ]
+            session_path = run_dir / "codex_session.jsonl"
+            stderr_path = run_dir / "codex_stderr.log"
         with open(session_path, "w", encoding="utf-8") as out, \
-             open(run_dir / "codex_stderr.log", "w", encoding="utf-8") as err:
+             open(stderr_path, "w", encoding="utf-8") as err:
             rc = subprocess.run(cmd, cwd=str(ws), env=env, stdin=subprocess.DEVNULL,
                                 stdout=out, stderr=err).returncode
         wall = time.time() - t0
@@ -320,19 +381,23 @@ def main(args) -> int:
         delivered = sorted(str(p.relative_to(graded)) for p in graded.rglob("*") if p.is_file())
 
         summary = parse_session(session_path)
-        if summary["n_events"] == 0:
+        session_text = session_path.read_text(encoding="utf-8", errors="replace")
+        # codex --json always emits parseable events, so an empty stream there means the
+        # chain never started and must NOT be cached. An external harness prints its own
+        # shape (claude -p prints prose unless it is asked for JSON), so empty metrics is
+        # expected there and the rollout is graded on what it actually delivered.
+        if summary["n_events"] == 0 and not external:
             print(f"[run_codex_lab] NO parseable events in {session_path}; "
                   f"NOT writing metrics.json (rc={rc})", file=sys.stderr)
             return 2
         if rc == 0 and not delivered:
             rc = 1   # exit 0 with an empty output/ is a failure, not a success
-        session_text = session_path.read_text(encoding="utf-8", errors="replace")
         docs_read, docs_total = doc_coverage(summary, ws / "documents", session_text)
         scratch_left = sorted(str(p.relative_to(ws)) for p in ws.rglob("*")
                               if p.is_file() and not str(p.relative_to(ws)).startswith(
                                   ("documents/", "output/")))[:200]
         metrics = {
-            "runner": "codex",
+            "runner": harness_id,
             "model": args.model,
             "task": args.task,
             "run_id": args.run_id,
@@ -340,7 +405,6 @@ def main(args) -> int:
             "tool_calls": summary["tool_calls"],
             "stream_errors": summary["errors"],
             "input_tokens": summary["input_tokens"],
-            "input_tokens_note": "As reported by the configured Codex endpoint.",
             "cached_input_tokens": summary["cached_input_tokens"],
             "output_tokens": summary["output_tokens"],
             "reasoning_tokens": summary["reasoning_output_tokens"],
@@ -356,9 +420,17 @@ def main(args) -> int:
             "workspace_scratch_files": scratch_left,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if not external:
+            metrics["input_tokens_note"] = "As reported by the configured Codex endpoint."
+        elif summary["n_events"] == 0:
+            # Say so on the record rather than let a caller read zeroes as real figures.
+            metrics["metrics_note"] = (
+                f"no parseable events in {session_path.name}: {harness_id} does not emit "
+                f"the codex JSON event shape, so turn/token counts are absent"
+            )
         (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-        print(f"[run_codex_lab] {args.run_id}: rc={rc} turns={summary['turns']} "
-              f"tools={summary['tool_calls']} wall={wall:.0f}s "
+        print(f"[run_codex_lab] {args.run_id}: runner={harness_id} rc={rc} "
+              f"turns={summary['turns']} tools={summary['tool_calls']} wall={wall:.0f}s "
               f"deliverables={', '.join(delivered) or 'NONE'}")
         return rc
     finally:
@@ -380,6 +452,19 @@ parser.add_argument("--timeout", type=int, default=int(os.environ.get(
 parser.add_argument("--harness-dir", default=None,
                     help="Rendered codex_root harness tree to install at the workspace root "
                          "(AGENTS.md, .agents/, scripts/, .codex/). Omit for a bare workspace.")
+parser.add_argument("--harness-id", default=None,
+                    help="Registered harness id to record in metrics.json (default: codex). "
+                         "Set this together with --harness-argv-json to run an external harness.")
+parser.add_argument("--harness-argv-json", default=None,
+                    help="JSON array of strings: the exact argv to run, built from the harness "
+                         "manifest by the adapter (harness2.substrate.ExternalCliSubstrate.argv). "
+                         "Omit for the codex cell.")
+parser.add_argument("--harness-env-json", default=None,
+                    help="JSON object of extra environment variables for the harness "
+                         "(ExternalCliSubstrate.exec_env); merged over os.environ.")
+parser.add_argument("--model-flag", default=None,
+                    help="The manifest's model_flag; when set, HARNESS2_MODEL is exported so a "
+                         "harness that reads the model from the environment can pick it up.")
 parser.add_argument("--doc-parser", choices=["sandbox", "host"],
                     default=os.environ.get("LAB_DOC_PARSER", "sandbox"),
                     help="Where scripts/read_doc.py parses binary documents "

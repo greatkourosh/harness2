@@ -37,10 +37,93 @@ from ..core import tree as HT
 from ..core.spec import BenchPrompts, BenchSpec, resolve_channel_model
 from ..substrate.base import Install, RunRequest
 from ..substrate.codex import CODEX_SURFACE, CodexSubstrate
+from ..substrate.external_cli import EXTERNAL_HARNESS_IDS, ExternalCliSubstrate
 from ..substrate.opencode import OPENCODE_SURFACE, OpencodeSubstrate
 from .tasks import discover, select
 
 JUDGE_MODEL = config.LAB_JUDGE_MODEL
+
+# Substrate ids this cell accepts beyond the two in-tree frameworks: every registered
+# harness whose manifest declares a non-interactive mode. They are codex-shaped by
+# convention (EXTERNAL_SURFACE is CODEX_SURFACE), so only the launcher differs.
+EXTERNAL_IDS = tuple(EXTERNAL_HARNESS_IDS)
+# The substrates that STAGE a surface tree via `substrate.materialise`. External ids
+# reuse the codex-shaped branch: their editable tree is the same AGENTS.md surface.
+PACKAGE_SURFACE = ("oc",)
+# Marks the prompt slot in an external harness's argv. The runner substitutes the real
+# prompt for it, because the prompt names the per-run workspace's absolute paths and only
+# the runner knows that directory. Must equal PROMPT_SENTINEL in run_codex_lab.py.
+_PROMPT_SENTINEL = "@@HARNESS2_PROMPT@@"
+_TRACKED = ("oc", "cx")
+
+
+def is_external(name: str) -> bool:
+    """An external harness id, as opposed to the in-tree oc/cx frameworks."""
+    return name not in _TRACKED
+
+
+def is_opencode(name: str) -> bool:
+    """Whether the cell runs OpenCode: only 'oc'. An external id is never opencode,
+    even when its manifest points the same binary at another provider."""
+    return name == "oc"
+
+
+def surface_for(substrate) -> HT.SurfaceSpec:
+    """The editable surface a cell validates and materialises against."""
+    return OPENCODE_SURFACE if is_opencode(substrate.name) else substrate.surface()
+
+
+def substrate_for(substrate: str, *, launcher) -> object:
+    """The Substrate for one cell: 'oc', 'cx', or a registered harness id.
+
+    External ids route to ExternalCliSubstrate, which drives the harness from its
+    manifest. This is the ONLY place that maps a cell name to a substrate class.
+    """
+    if substrate == "oc":
+        return OpencodeSubstrate(launcher=launcher)
+    if substrate == "cx":
+        return CodexSubstrate(launcher=launcher)
+    try:
+        return ExternalCliSubstrate(substrate, launcher=launcher)
+    except ValueError as exc:
+        raise ValueError(
+            f"unknown substrate {substrate!r}: expected 'oc', 'cx', or a registered "
+            f"harness id with a non-interactive mode ({', '.join(EXTERNAL_IDS)})"
+        ) from exc
+
+
+def model_for(substrate: str, explicit: str | None) -> str:
+    """The solver model id for one cell, and NEVER a bare pattern group.
+
+    oc/cx take the configured per-framework model. An external harness is resolved
+    from its manifest: an explicit `default_model` first (so no gateway round trip),
+    else the first allowed id -- which is a pattern group only when the manifest names
+    no default, and that is exactly the case this guard refuses rather than sending
+    an unsubstituted pattern to the gateway.
+    """
+    if explicit:
+        return explicit
+    if substrate == "oc":
+        return config.SOLVER_MODEL_OC
+    if substrate == "cx":
+        return config.SOLVER_MODEL_CX
+    from ..harnesses import registry as HREG
+
+    spec = HREG.load_one(substrate)
+    model = spec.default_model or (spec.allowed_models[0] if spec.allowed_models else "")
+    if not model:
+        raise ValueError(
+            f"{substrate}: no solver model; name one with --model or set default_model "
+            f"in its manifest"
+        )
+    if not spec.default_model and any(c in model for c in "*?["):
+        raise ValueError(
+            f"{substrate}: its manifest allows only the pattern group {model!r} and names "
+            f"no default_model, so the concrete gateway id cannot be resolved here; "
+            f"pass --model <id>"
+        )
+    return model
+
 
 _BASE_LOCK = threading.Lock()
 _BASE_DONE: set[Path] = set()
@@ -486,19 +569,22 @@ def _require_runtime_scripts() -> frozenset[str]:
 
 def lab_spec(substrate_name: str) -> BenchSpec:
     """The LAB BenchSpec for one substrate cell. A value, not a code path."""
-    if substrate_name not in ("oc", "cx"):
-        raise ValueError(f"substrate must be 'oc' or 'cx', got {substrate_name!r}")
+    if substrate_name not in _TRACKED and substrate_name not in EXTERNAL_IDS:
+        raise ValueError(
+            f"substrate must be 'oc', 'cx', or a registered harness id "
+            f"({', '.join(EXTERNAL_IDS)}), got {substrate_name!r}"
+        )
     channel = resolve_channel_model(None, None, effort="high")
     return BenchSpec(
         name="lab",
         runs_root=config.RUNS / "lab",
-        install_mode="workspace_config" if substrate_name == "oc" else "codex_root",
+        install_mode="workspace_config" if is_opencode(substrate_name) else "codex_root",
         prompts=LAB_BASE,
         channels={"proposer": channel, "selector": channel},
         domain_word="practice area",
         leak_globs=("task.json",),
         allow_subagents=False,
-        reserved_scripts=_runtime_scripts() if substrate_name == "oc" else frozenset(),
+        reserved_scripts=_runtime_scripts() if is_opencode(substrate_name) else frozenset(),
         proposer_deliverables="contents",
         obs_trunc=50_000,
     )
@@ -527,15 +613,16 @@ class LabAdapter:
         if skill_mode not in ("native", "inline"):
             raise ValueError(f"skill_mode must be 'native' or 'inline', got {skill_mode!r}")
         self.spec = lab_spec(substrate)
-        if substrate == "oc":
-            self.substrate = OpencodeSubstrate(launcher=self._launch_oc)
-            self.model = model or config.SOLVER_MODEL_OC
-            self._results_root = config.RUNS / "lab" / "results" / "oc"
-        else:
-            self.substrate = CodexSubstrate(launcher=self._launch_cx)
-            self.model = model or config.SOLVER_MODEL_CX
-
-            self._results_root = config.RUNS / "lab" / "results" / "cx"
+        launcher = (
+            self._launch_oc
+            if substrate == "oc"
+            else (self._launch_cx if substrate == "cx" else self._launch_external)
+        )
+        self.substrate = substrate_for(substrate, launcher=launcher)
+        self.model = model_for(substrate, model)
+        # One results root per cell keeps two substrates' run dirs from colliding; the
+        # cell name is the directory component in every case, external ids included.
+        self._results_root = config.RUNS / "lab" / "results" / substrate
         self.timeout = int(timeout or 3600)
         self.skill_mode = skill_mode
         self.solver_effort = solver_effort
@@ -639,6 +726,16 @@ class LabAdapter:
             return Install(
                 staging_dir=self.base_harness(), fingerprint="base", extras={"harness": "base"}
             )
+        if self.substrate.name in PACKAGE_SURFACE:
+            # oc materialises its tree into a loadable workspace_config; every other cell
+            # installs the editable tree as-is, so a staged tree must already be that
+            # surface's own tree (AGENTS.md for cx and the external harnesses).
+            surface = surface_for(self.substrate)
+            if not HT.is_tree(surface, harness_dir):
+                raise ValueError(
+                    f"a staged harness for {self.substrate.name} must be a {surface.name} "
+                    f"tree (missing {', '.join(surface.always_on)})"
+                )
         inst = self.substrate.materialise(Path(harness_dir), self.spec, {})
         return Install(
             staging_dir=inst.staging_dir,
@@ -743,6 +840,77 @@ class LabAdapter:
             dirs.append(self._run_dir(run_id))
         return dirs
 
+    def _launch_external(self, req: RunRequest, install: Install) -> list[Path]:
+        """Drive a registered harness through the same runner the codex cell uses.
+
+        The argv comes from the harness manifest (`ExternalCliSubstrate.argv`), with the
+        prompt slot left as a sentinel: the runner owns the per-run workspace, so IT
+        substitutes the prompt that names the real absolute paths. The harness reaches
+        the gateway through its own already-applied config, so unlike the cx cell there
+        is no CODEX_HOME to build here.
+        """
+        runner = config.lab_repo() / "external" / "adapt_runs_cx" / "run_codex_lab.py"
+        _require_runner(runner)
+        self.substrate.preflight()
+        argv = self.substrate.argv(_PROMPT_SENTINEL, Path("."), self.model)
+        env_json = json.dumps(self.substrate.exec_env(os.environ))
+        dirs = []
+        for run_id in req.run_ids:
+            cmd = [
+                str(config.LAB_PYTHON),
+                "-u",
+                str(runner),
+                "--task",
+                req.task_ref,
+                "--run-id",
+                run_id,
+                "--model",
+                self.model,
+                "--timeout",
+                str(req.timeout),
+                "--harness-dir",
+                str(install.staging_dir),
+                "--harness-id",
+                self.substrate.name,
+                "--harness-argv-json",
+                json.dumps(argv),
+                "--harness-env-json",
+                env_json,
+            ]
+            env = {
+                **_lab_env(),
+                "ADAPT_LABCX_RESULTS": str(self._results_root),
+                "ADAPT_LABCX_SCRATCH": os.environ.get("ADAPT_LABCX_SCRATCH")
+                or str(config.RUNS / "lab" / "scratch"),
+            }
+            # The runner's own narration is the only account of WHY a rollout failed
+            # (a permission stall, an unreachable endpoint); discarding it turns a long
+            # failure into a bare exit status. It lands beside the run it describes.
+            log = self._run_dir(run_id) / f"{self.substrate.name}_runner.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("w", encoding="utf-8") as handle:
+                try:
+                    run_detached(
+                        cmd,
+                        cwd=config.lab_repo(),
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=handle,
+                        stderr=subprocess.STDOUT,
+                        timeout=req.timeout + 900,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        f"the {self.substrate.name} runner hit its wall timeout; see {log}"
+                    ) from exc
+                except RuntimeError as exc:
+                    # Carry the log into the message: the runner's own narration is the
+                    # only account of why a rollout failed, and `execute` re-raises here
+                    # anyway (no metrics.json means the cell is not cached).
+                    raise RuntimeError(f"{exc}; runner output: {log}") from exc
+            dirs.append(self._run_dir(run_id))
+        return dirs
+
     def _safe_rmtree(self, d: Path) -> None:
         """rm -rf restricted to this cell's results root — a guard, not a convenience."""
         d = Path(d).resolve()
@@ -768,7 +936,10 @@ class LabAdapter:
 
     def trajectory(self, run_dir: Path, *, obs_trunc: int) -> str:
         """The substrate's ONE renderer over the raw session stream, effectively uncapped."""
-        name = "opencode_session.jsonl" if self.substrate.name == "oc" else "codex_session.jsonl"
+        name = "opencode_session.jsonl" if is_opencode(self.substrate.name) else (
+            "codex_session.jsonl" if self.substrate.name == "cx"
+            else f"{self.substrate.name}_session.jsonl"
+        )
         stream = Path(run_dir) / name
         if not stream.is_file():
             return f"(no trajectory recorded for {Path(run_dir).name})"
@@ -829,13 +1000,14 @@ class LabAdapter:
     def base_harness(self) -> Path:
         """The unmodified tree this cell starts from, materialised once per process and per
         pid: the domain threads of one sweep share the path."""
-        if self.substrate.name == "oc":
+        if is_opencode(self.substrate.name):
             d = self.spec.runs_root / f"_base_harness_{self.skill_mode}_{os.getpid()}"
         else:
-            d = self.spec.runs_root / f"_base_harness_cx_{os.getpid()}"
+            # Keyed by cell so an external id and 'cx' never share a materialised base.
+            d = self.spec.runs_root / f"_base_harness_{self.substrate.name}_{os.getpid()}"
         with _BASE_LOCK:
             if d not in _BASE_DONE:
-                if self.substrate.name == "oc":
+                if is_opencode(self.substrate.name):
                     HT.write_tree(
                         OPENCODE_SURFACE,
                         {
@@ -847,14 +1019,17 @@ class LabAdapter:
                         d,
                     )
                 else:
+                    # The codex-shaped base is the AGENTS.md convention every external
+                    # harness reads, so an external cell starts from the same body.
                     HT.write_tree(CODEX_SURFACE, {"AGENTS.md": CODEX_BASE_BODY}, d)
                 _BASE_DONE.add(d)
         return d
 
     def validate_tree(self, tree: dict[str, str]) -> None:
         """LAB environment invariants: deliverables go to output/, binary documents are read
-        via scripts/read_doc.py. oc checks the RENDERED prompt, cx the AGENTS.md body."""
-        if self.substrate.name == "oc":
+        via scripts/read_doc.py. oc checks the RENDERED prompt; cx and every external
+        harness (same AGENTS.md surface) check the always-on body."""
+        if is_opencode(self.substrate.name):
             self._validate_oc(tree)
         else:
             self._validate_cx(tree)
@@ -893,7 +1068,7 @@ class LabAdapter:
             raise ValueError(" | ".join(errs))
 
     def _validate_cx(self, tree: dict[str, str]) -> None:
-        body = HT.always_on_text(CODEX_SURFACE, tree)
+        body = HT.always_on_text(surface_for(self.substrate), tree)
         errs = []
         if "output/" not in body:
             errs.append(

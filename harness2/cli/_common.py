@@ -26,13 +26,17 @@ from pathlib import Path
 from ..core import library as LIB
 from ..core import schedule as SCHED
 from ..core.spec import BenchmarkAdapter
+from ..substrate.external_cli import EXTERNAL_HARNESS_IDS
 
 BENCHES = ("jb", "wb", "lab")
 WB_SUBSETS = ("office", "web", "code")
-# The benchmark adapters below hardcode this two-way split (each owns a
-# launcher body, a base tree and a result path per substrate), so an external
-# harness is NOT a third entry here: `--substrate pi` would silently build a
-# CodexSubstrate. External harnesses run through `harness2-harness bench`.
+# The benchmark adapters own a launcher body, a base tree and a result path per cell.
+# jb and wb hardcode the two-way oc/cx split, so a registered external harness is NOT
+# accepted there: it has no launcher body and (for wb) no Harbor harness slug, and an
+# id accepted anyway would silently run the wrong agent. LAB accepts one -- its
+# launcher drives any AGENTS.md-shaped harness through the shared runner -- so external
+# ids are offered for --bench lab only. See docs/HARNESSES.md.
+LAB_SUBSTRATES = ("oc", "cx") + tuple(EXTERNAL_HARNESS_IDS)
 SUBSTRATES = ("oc", "cx")
 
 MODES_DEFAULT = "parallel"
@@ -52,8 +56,16 @@ def make_adapter(
     """The one place a CLI turns (--bench, --subset, --substrate) into an adapter."""
     if bench not in BENCHES:
         raise ValueError(f"unknown bench {bench!r}; expected one of {BENCHES}")
-    if substrate not in SUBSTRATES:
-        raise ValueError(f"unknown substrate {substrate!r}; expected one of {SUBSTRATES}")
+    # Only LAB has a launcher body for an external harness; see LAB_SUBSTRATES above.
+    allowed = LAB_SUBSTRATES if bench == "lab" else SUBSTRATES
+    if substrate not in allowed:
+        extra = ""
+        if substrate in EXTERNAL_HARNESS_IDS:
+            extra = (
+                f" — {substrate!r} is accepted for --bench lab only; jb and wb have no "
+                f"launcher body for an external harness"
+            )
+        raise ValueError(f"unknown substrate {substrate!r} for --bench {bench}; expected one of {allowed}{extra}")
     if bench == "wb":
         if subset not in WB_SUBSETS:
             raise ValueError(f"--bench wb needs --subset from {WB_SUBSETS}, got {subset!r} ")
@@ -107,8 +119,12 @@ def add_cell_args(p: argparse._ActionsContainer) -> None:
     p.add_argument(
         "--substrate",
         default="oc",
-        choices=SUBSTRATES,
-        help="task-executor substrate: oc (opencode) | cx (codex)",
+        # The superset: argparse cannot see the --bench value here, so an external id is
+        # offered and make_adapter enforces the per-bench rule (lab only) with a message
+        # that says why jb/wb refuse it.
+        choices=LAB_SUBSTRATES,
+        help="task-executor substrate: oc (opencode) | cx (codex) | a registered harness "
+        "id (--bench lab only, e.g. claude-code, pi, deepseek)",
     )
 
 
