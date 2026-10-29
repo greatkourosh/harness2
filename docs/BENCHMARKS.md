@@ -109,6 +109,23 @@ with `GOOGLE_CLOUD_PROJECT` set; `--dry-run` reports the requirement and still
 prints the rest of the plan. The benchmark's job-local proxy refreshes ADC tokens
 and preserves Gemini tool-call thought signatures.
 
+### On a 9router gateway
+
+All three roles may instead route through 9router (`HARNESS2_SOLVER_MODEL` and
+`HARNESS2_JUDGE_MODEL` as `9router/...` IDs, with
+`HARNESS2_9ROUTER_BASE_URL`/`HARNESS2_9ROUTER_API_KEY` set). No Google account is
+involved, and the routes carry the gateway's own model ids rather than the
+Vertex `google/<model>` spelling.
+
+Two preflight checks used to make that path impossible to start, and both are
+fixed: the solver/judge "configuration is stale" check compared the written name
+against the Vertex form only, so a correct 9router setup was reported stale; and
+the ADC (`gcloud auth application-default`) probe was gated on `bench == "wb"`,
+so it demanded Google credentials from a cell that never contacts Vertex. The
+gate now keys on the route: ADC is probed only when some role is actually a
+`google-vertex/...` id. `dependencies/workbuddy-bench/configs/models/harness2/{solver,judge}.yaml`
+records whichever route was written, and `harness2-check` accepts it.
+
 Setup patches the upstream fetch script to download with `curl` (then `wget`,
 then `hf`) and to require the dataset repository's `SHA256SUMS`: an archive that
 cannot be verified is not unpacked. A verified download prints

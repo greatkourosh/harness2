@@ -146,18 +146,20 @@ def install_harness(ws: Path, harness_dir: Path | None) -> list[str]:
     return installed
 
 
-def parse_session(session_path: Path) -> dict:
-    """Summarise a `codex exec --json` stream for metrics.json (last state per item wins)."""
-    events: dict[str, dict] = {}
-    order: list[str] = []
-    turns = 0
-    usage_sums = {"input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0,
-                  "cached_input_tokens": 0}
-    n_other = 0
+def _int_or_zero(v) -> int:
     try:
-        raw = session_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        raw = ""
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _iter_codex_events(raw: str):
+    """Yield codex's own event objects: only lines that lead with `{"type":`.
+
+    Codex serialises `type` first, so this is its exact shape and stays as it was.
+    Claude does NOT (its `result` event leads with `duration_api_ms`), which is why
+    the claude branch below reads with `_iter_any_events` instead.
+    """
     for ln in raw.replace("\x00", "").splitlines():
         ln = ln.strip()
         if not ln.startswith('{"type":'):
@@ -166,8 +168,54 @@ def parse_session(session_path: Path) -> dict:
             ev = json.loads(ln)
         except json.JSONDecodeError:
             continue
-        if not isinstance(ev, dict):
+        if isinstance(ev, dict):
+            yield ev
+
+
+def _iter_any_events(raw: str):
+    """Yield every JSON object line regardless of field order."""
+    for ln in raw.replace("\x00", "").splitlines():
+        ln = ln.strip()
+        if not ln.startswith("{"):
             continue
+        try:
+            ev = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(ev, dict):
+            yield ev
+
+
+def _looks_like_claude_stream(raw: str) -> bool:
+    """Whether this stream is `claude -p --output-format stream-json` rather than codex.
+
+    The two are told apart by their terminal and assistant events: codex emits
+    `item.completed`/`turn.completed` payloads, claude a `result` event and
+    `assistant` events that carry a nested `message` object. Nothing else differs
+    enough to be worth keying on.
+    """
+    for ev in _iter_any_events(raw):
+        et = ev.get("type")
+        if et == "result":
+            return True
+        if et == "assistant" and isinstance(ev.get("message"), dict):
+            return True
+    return False
+
+
+def _parse_codex_events(raw: str) -> dict:
+    """Summarise a `codex exec --json` stream (last state per item wins).
+
+    Codex reports usage per turn and omits it from its items, so summing every
+    `turn.completed` is the only way to total it.
+    """
+    events: dict[str, dict] = {}
+    order: list[str] = []
+    turns = 0
+    usage_sums = {"input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0,
+                  "cached_input_tokens": 0}
+    n_other = 0
+    for ev in _iter_codex_events(raw):
         et = ev.get("type", "")
         item = ev.get("item")
         if isinstance(item, dict) and item.get("id") is not None:
@@ -181,10 +229,7 @@ def parse_session(session_path: Path) -> dict:
             turns += 1
             u = ev.get("usage") or {}
             for k in usage_sums:
-                try:
-                    usage_sums[k] += int(u.get(k) or 0)
-                except (TypeError, ValueError):
-                    pass
+                usage_sums[k] += _int_or_zero(u.get(k))
     items = [events[i] for i in order]
     commands = [str(it.get("command") or "") for it in items
                 if it.get("type") == "command_execution"]
@@ -202,6 +247,93 @@ def parse_session(session_path: Path) -> dict:
         "final_text": final_text,
         **usage_sums,
     }
+
+
+def _parse_claude_events(raw: str) -> dict:
+    """Summarise a `claude -p --output-format stream-json` stream.
+
+    Usage and turn count come from the single terminal `result` event, which is the
+    only event carrying them: the per-assistant events report an all-zero usage
+    object, so summing them (as the codex branch does per turn) would report zero,
+    and summing them alongside `result` would double-count. `usage_present` is False
+    when the stream ended without such an event -- a run cut short mid-turn -- so a
+    caller can say the figures are ABSENT rather than let zeroes read as real.
+    """
+    tool_calls = 0
+    errors = 0
+    n_events = 0
+    final_text = ""
+    result_ev: dict | None = None
+    for ev in _iter_any_events(raw):
+        n_events += 1
+        et = ev.get("type")
+        if et == "assistant":
+            msg = ev.get("message")
+            if isinstance(msg, dict):
+                for block in msg.get("content") or []:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "tool_use":
+                        tool_calls += 1
+                    elif block.get("type") == "text":
+                        txt = str(block.get("text") or "")
+                        if txt.strip():
+                            final_text = txt
+            # An auth or transport failure arrives as an `error` field on the event.
+            if ev.get("error"):
+                errors += 1
+            continue
+        if et == "result":
+            result_ev = ev
+            continue
+        if et == "error" or isinstance(ev.get("error"), (dict, str)):
+            errors += 1
+
+    usage_sums = {"input_tokens": 0, "output_tokens": 0, "reasoning_output_tokens": 0,
+                  "cached_input_tokens": 0}
+    turns = 0
+    usage_present = False
+    if isinstance(result_ev, dict):
+        turns = _int_or_zero(result_ev.get("num_turns"))
+        u = result_ev.get("usage")
+        if isinstance(u, dict):
+            usage_present = True
+            details = u.get("output_tokens_details")
+            usage_sums["input_tokens"] = _int_or_zero(u.get("input_tokens"))
+            usage_sums["output_tokens"] = _int_or_zero(u.get("output_tokens"))
+            usage_sums["reasoning_output_tokens"] = _int_or_zero(
+                (details or {}).get("thinking_tokens") if isinstance(details, dict) else 0)
+            # Both cache figures are input the model read back, so they belong together.
+            usage_sums["cached_input_tokens"] = (
+                _int_or_zero(u.get("cache_read_input_tokens"))
+                + _int_or_zero(u.get("cache_creation_input_tokens")))
+        txt = result_ev.get("result")
+        if isinstance(txt, str) and txt.strip():
+            final_text = txt
+        if result_ev.get("is_error"):
+            errors += 1
+    return {
+        "n_events": n_events,
+        "n_items": 0,
+        "tool_calls": tool_calls,
+        "commands": [],
+        "errors": errors,
+        "turns": turns,
+        "final_text": final_text,
+        "usage_present": usage_present,
+        **usage_sums,
+    }
+
+
+def parse_session(session_path: Path) -> dict:
+    """Summarise a session stream for metrics.json, codex or claude shaped."""
+    try:
+        raw = session_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raw = ""
+    if _looks_like_claude_stream(raw):
+        return _parse_claude_events(raw)
+    return _parse_codex_events(raw)
 
 
 def doc_coverage(summary: dict, docs_dir: Path, session_text: str) -> tuple[int, int]:
@@ -422,11 +554,17 @@ def main(args) -> int:
         }
         if not external:
             metrics["input_tokens_note"] = "As reported by the configured Codex endpoint."
-        elif summary["n_events"] == 0:
-            # Say so on the record rather than let a caller read zeroes as real figures.
+        elif summary.get("usage_present") is False or summary["n_events"] == 0:
+            # Say so on the record rather than let zeroes read as real figures. This
+            # covers a harness that emits no parseable event at all (n_events == 0, the
+            # prose case) AND a parseable stream that stopped before its terminal event
+            # (a rollout killed mid-turn) -- exactly when reporting 0 tokens is a lie.
+            # An external harness emitting the CODEX shape reports usage the codex way,
+            # so it has no `usage_present` key and is correctly left unannotated.
             metrics["metrics_note"] = (
-                f"no parseable events in {session_path.name}: {harness_id} does not emit "
-                f"the codex JSON event shape, so turn/token counts are absent"
+                f"no usage figures in {session_path.name}: either {harness_id} does not "
+                f"emit a readable event shape, or the session ended before its terminal "
+                f"event, so turn/token counts are absent (deliverables are unaffected)"
             )
         (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         print(f"[run_codex_lab] {args.run_id}: runner={harness_id} rc={rc} "

@@ -189,10 +189,16 @@ class SubstrateTests(unittest.TestCase):
         self.assertEqual(argv, ["pi", "--model", "9router/All", "hi"])
 
     def test_claude_code_headless_carries_a_permission_mode(self):
-        """Without it every write is held for approval and nothing is delivered."""
+        """Without it every write is held for approval and nothing is delivered.
+
+        The mode must be one that lets Bash run: `acceptEdits` denies
+        `python3 scripts/read_doc.py`, which is how every binary document in the
+        LAB workspace is read, so the agent cannot do the work at all.
+        """
         spec = registry.load_one("claude-code")
         self.assertIn("--permission-mode", spec.headless)
-        self.assertIn("acceptEdits", spec.headless)
+        mode = spec.headless[spec.headless.index("--permission-mode") + 1]
+        self.assertIn(mode, ("auto", "bypassPermissions"))
 
     def test_deepseek_headless_passes_no_model_flag(self):
         """dsh selects its model from the profile, not from argv."""
@@ -358,6 +364,112 @@ class RoutingTests(unittest.TestCase):
 
         spec = registry.load_one("pi")
         self.assertEqual(_resolve_model(spec, "some/explicit-id"), "some/explicit-id")
+
+
+class BenchMetricsTests(unittest.TestCase):
+    """`harness2-harness bench` reads its own stream, so a claude capture needs the
+    same reading rule the LAB runner uses: totals come from the terminal `result`
+    event, whose `type` field claude writes LAST and which the per-assistant
+    events cannot supply (their usage is all zeros)."""
+
+    def _metrics(self, raw: str) -> dict:
+        from harness2.benchmarks.external_runner import _read_metrics_stream
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "claude-code_session.jsonl"
+            p.write_text(raw, encoding="utf-8")
+            return _read_metrics_stream(p, "claude-code")
+
+    # `type` last in the result event, exactly as claude writes it.
+    _CLAUDE = "\n".join([
+        json.dumps({"type": "system", "subtype": "init"}),
+        json.dumps({"type": "assistant", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "hi"}],
+            "usage": {"input_tokens": 0, "output_tokens": 0}}}),
+        json.dumps({"duration_api_ms": 12, "num_turns": 3, "is_error": False,
+                    "result": "done", "timeout": 1,
+                    "usage": {"input_tokens": 30952, "output_tokens": 12},
+                    "type": "result"}, sort_keys=True),
+    ]) + "\n"
+
+    def test_totals_come_from_the_result_event(self):
+        got = self._metrics(self._CLAUDE)
+        self.assertEqual(got["turn_count"], 3)
+        self.assertEqual(got["input_tokens"], 30952)
+        self.assertEqual(got["output_tokens"], 12)
+
+    def test_zero_usage_is_not_double_counted(self):
+        got = self._metrics(self._CLAUDE)
+        self.assertEqual(got["input_tokens"], 30952, "assistant usage added on top")
+
+    def test_prose_stream_yields_no_figures(self):
+        got = self._metrics("plain prose, no events\n")
+        self.assertIsNone(got["turn_count"])
+        self.assertIsNone(got["input_tokens"])
+
+    def test_the_closing_answer_is_captured(self):
+        """A task need not write a file -- "hey" is answered in prose, and that
+        prose is what the panel has to show."""
+        self.assertEqual(self._metrics(self._CLAUDE)["answer"], "done")
+
+    def test_codex_answer_is_read_from_its_agent_message(self):
+        raw = "\n".join([
+            json.dumps({"type": "item.completed", "item": {
+                "id": "i1", "type": "agent_message", "text": "first"}}),
+            json.dumps({"type": "item.completed", "item": {
+                "id": "i1", "type": "agent_message", "text": "final answer"}}),
+        ]) + "\n"
+        self.assertEqual(self._metrics(raw)["answer"], "final answer")
+
+
+class DoAcceptsAnAnswer(unittest.TestCase):
+    """`harness2-harness do` must not call a prose answer a failure.
+
+    It used to require a delivered file, so asking a question printed "every
+    harness failed" for a run that exited 0 and answered correctly -- and fell
+    through to the next harness, spending on every candidate in turn.
+    """
+
+    def _run_do(self, metrics: dict) -> tuple[int, str]:
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest.mock import patch
+
+        from harness2.benchmarks import external_runner as ER
+        from harness2.cli import harness as H
+
+        def fake_run_one(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+            return run_dir
+
+        args = SimpleNamespace(
+            task="what does this do?",
+            harness="claude-code",
+            model=None,
+            run_id="do/t",
+            results_root=Path(tempfile.mkdtemp()),
+            task_dir=None,
+            timeout=60,
+            no_fallback=True,
+        )
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(ER, "run_one", side_effect=fake_run_one), \
+             redirect_stdout(out), redirect_stderr(err):
+            code = H.cmd_do(args)
+        return code, out.getvalue()
+
+    def test_an_answered_run_is_a_success(self):
+        code, out = self._run_do(
+            {"exit_code": 0, "delivered": [], "answer": "It parses the file."}
+        )
+        self.assertEqual(code, 0, "a prose answer must not be reported as a failure")
+        self.assertIn("It parses the file.", out, "the answer must be shown")
+
+    def test_a_nonzero_exit_is_still_a_failure(self):
+        code, _ = self._run_do({"exit_code": 1, "delivered": [], "answer": "partial"})
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

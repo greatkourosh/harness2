@@ -62,9 +62,12 @@ class Job:
     routed_by: str
     workspace: Path
     cloned: bool
-    state: str = "queued"  # queued | running | done | failed
+    state: str = "queued"  # queued | running | done | no_files | failed
     exit_code: int | None = None
     delivered: list[str] = field(default_factory=list)
+    # The harness's closing message. A task that asks a question has no file to
+    # point at, so its answer is what the panel must show.
+    answer: str = ""
     cancelled: bool = False
     error: str = ""
     started: str = ""
@@ -84,6 +87,7 @@ class Job:
             "state": self.state,
             "exit_code": self.exit_code,
             "delivered": list(self.delivered),
+            "answer": self.answer,
             "cancelled": self.cancelled,
             "error": self.error,
             "started": self.started,
@@ -286,7 +290,13 @@ class JobStore:
 
         delivered = metrics.get("delivered") or []
         exit_code = metrics.get("exit_code")
-        ok = exit_code == 0 and bool(delivered)
+        answer = metrics.get("answer") or ""
+        # A clean run is a SUCCESS whether or not it wrote a file. "hey" is
+        # answered in prose, and that prose is the deliverable; a task that names
+        # a file must also produce one. So: exit != 0 (or no metrics) is the only
+        # failure, and an exit-0 run is `done` when it either delivered a file or
+        # produced a reply. The reply is kept on the job so the panel can show
+        # what was actually said instead of reporting an empty run.
         with self._lock:
             # A cancel already decided this job's outcome, and it may have done
             # so while this thread was still unwinding: the run directory can
@@ -297,11 +307,19 @@ class JobStore:
                 return
             job.exit_code = exit_code
             job.delivered = list(delivered)
-            job.state = "done" if ok else "failed"
-            if not ok and not job.error:
-                job.error = (
-                    f"exit {exit_code}" if exit_code is not None else "produced no metrics"
-                )
+            job.answer = answer
+            if exit_code == 0 and (delivered or answer):
+                job.state = "done"
+            elif exit_code == 0:
+                # Ran cleanly but said nothing and wrote nothing: surfaced as its
+                # own state, not a failure, because nothing actually went wrong.
+                job.state = "no_files"
+            else:
+                job.state = "failed"
+                if not job.error:
+                    job.error = (
+                        f"exit {exit_code}" if exit_code is not None else "produced no metrics"
+                    )
             job.finished = _now()
 
 def projects() -> list[dict]:

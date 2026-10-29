@@ -306,18 +306,55 @@ Two things worth knowing about this path:
   pass `LAB_DOC_PARSER=host` / `--doc-parser host` or the agent's binary-document
   reads return noise.
 
-  **Known ceiling: an external harness's trajectory and token metrics are empty
-  unless it emits the codex JSON event shape.** The capture is the harness's own
-  stdout, and the shared renderer only understands codex's JSONL; `claude -p`
-  prints prose, so its `metrics.json` carries a `metrics_note` saying the counts
-  are absent and its trajectory renders as "(no parseable events)". Grading is
-  unaffected — deliverables are read from `output/`, not from the stream — but
-  the improver and selector, which read trajectories, are blind for such a
-  harness. Closing this means either asking the harness for JSON output in its
-  manifest's `headless` (which also changes what `harness2-harness bench` prints)
-  or teaching the renderer that harness's shape. Not done yet, on purpose.
-- **A harness needs `--permission-mode acceptEdits` (or equivalent) to deliver
-  anything headlessly.** With the default mode `claude -p` holds every file
-  write for approval, has nobody to ask, and reports success having written
-  nothing — `exit_code: 0` with an empty `delivered`. The claude-code manifest
-  carries the flag for this reason.
+  **Trajectory and token metrics for a non-codex harness.** The capture is the
+  harness's own stdout, which only the codex renderer understood, so `claude -p`
+  used to render as "(no parseable events)" with a `metrics_note` saying the
+  counts were absent — leaving the improver and selector, which read
+  trajectories, blind for such a harness. Grading was never affected:
+  deliverables are read from `output/`, not from the stream.
+
+  Closed for claude code by asking the harness for structured output rather than
+  teaching the renderer only: its manifest's `headless` now carries
+  `--output-format stream-json --verbose` (the latter is required under
+  `--print`, not decorative), and two small branches read that schema —
+  `parse_session` in the LAB runner and `render_events` in
+  `harness2/substrate/codex.py`. Two facts that shape the code:
+
+  - **Usage lives only on the terminal `result` event.** The per-assistant events
+    carry an all-zero `usage`, so summing them reports zero; the totals
+    (`input_tokens`, `output_tokens`, `cached_input_*`, `num_turns`) are read from
+    `result` alone. A stream that ends before that event reports its usage as
+    *absent* (`usage_present: false`, plus the `metrics_note`) rather than as
+    zeroes, so a rollout killed mid-turn cannot be mistaken for a cheap one.
+    Both outcomes are verified on real runs: a finished one reports
+    `turns=17 in=832808 out=5811` matching its raw `result` event, while one killed
+    at the wall reports `tool_calls: 141` with tokens absent and the note naming the
+    incomplete session.
+  - **Claude writes `type` last.** Its `result` event begins
+    `{"duration_api_ms":...`, so a reader that keys on the codex `{"type":` line
+    prefix silently drops it. The claude branch parses by the `{` prefix instead;
+    codex's own reading rule is unchanged.
+
+  A harness that emits neither shape still gets the honest `metrics_note`. The
+  renderer is not a per-harness registry — a third shape would earn one, the
+  second did not.
+
+  `harness2-harness bench` writes the same stream to `<harness>_session.jsonl`,
+  and `harness2/benchmarks/external_runner.py` summarises it with its own reader;
+  that reader applies the same rule. Measured on a two-line probe: with the flag,
+  a bench run reported `turn_count: 1, input_tokens: 30952, output_tokens: 1`
+  matching its raw `result` event, where before the fix `turn_count` was null
+  (the totals only looked right by luck, because the assistant events are zero).
+- **Headless delivery needs a permission mode that lets Bash run, and
+  `acceptEdits` is not one.** With a prompting mode `claude -p` holds every
+  unlisted action for approval, has nobody to ask, and the agent burns its whole
+  wall retrying: one measured rollout spent 5400s on 322 denials and delivered a
+  scratch file. `acceptEdits` auto-approves only edits and a small safe-command
+  allowlist — `echo` passes, `python3 -c`, `unzip -l`, `pandoc` and `awk` do not
+  (0 allowed / 1 denied on a straight probe). LAB cannot work under that, because
+  reading a binary document *is* `python3 scripts/read_doc.py <path>`. The
+  manifest therefore carries `--permission-mode auto` (3/3 on the same probe),
+  which lets Bash run while keeping the classifier in the loop; the alternative
+  `bypassPermissions` is what the codex cell effectively does already
+  (`--dangerously-bypass-approvals-and-sandbox`). The workspace is a per-run
+  scratch directory either way.

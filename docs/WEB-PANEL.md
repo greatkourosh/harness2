@@ -29,12 +29,29 @@ harness on `auto` routes by the task text, exactly as `harness2-harness do`
 does; picking one overrides that.
 
 **Task list** — every task, newest first, with its project, state
-(`queued` / `running` / `done` / `failed`), harness and model. The page polls
-every 1.5s while anything is running and every 6s when everything has settled,
-so a quiet panel does not keep waking the machine.
+(`queued` / `running` / `done` / `no output` / `failed`), harness and model. The
+page polls every 1.5s while anything is running and every 6s when everything has
+settled, so a quiet panel does not keep waking the machine.
 
 **Detail** — the selected task: workspace, harness, model, why it was routed
-there, exit code, the delivered file names, and the harness's own output log.
+there, exit code, the agent's **answer**, the delivered file names, and the
+harness's own output log.
+
+### What a task's state means
+
+Exit status alone does not tell you whether the work happened, so the panel
+separates the three cases:
+
+| state | meaning |
+|---|---|
+| `done` | `exit 0`, and the run either delivered a file or produced an answer. |
+| `no output` | `exit 0`, but the agent neither wrote a file nor said anything. Nothing went wrong; there was simply no result. Not a failure. |
+| `failed` | Non-zero exit, no metrics at all, or cancelled. |
+
+A task does not have to write a file. `hey` is answered in prose, and that reply
+*is* the deliverable — the runner records it as `answer` in `metrics.json` and
+the panel shows it under the task, so a conversational prompt reads as finished
+work rather than as an empty run.
 
 ## Where a task actually runs
 

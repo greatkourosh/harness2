@@ -75,6 +75,7 @@ PAGE = """<!doctype html>
    color:var(--dim); flex:0 0 auto }
  .s-running { color:var(--run); border-color:var(--run) }
  .s-done { color:var(--ok); border-color:var(--ok) }
+ .s-no_files { color:var(--dim); border-color:var(--line) }
  .s-failed { color:var(--bad); border-color:var(--bad) }
  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px;
    padding:11px; overflow:auto; max-height:calc(100vh - 300px); font-size:12px;
@@ -138,7 +139,7 @@ async function poll() {
     <div class="row ${j.id===selected?'sel':''}" onclick="pick('${j.id}')">
       <div class="top">
         <span class="proj">${esc(j.project)}</span>
-        <span class="pill s-${j.state}">${j.state}</span>
+        <span class="pill s-${j.state}">${j.state === 'no_files' ? 'no files' : j.state}</span>
       </div>
       <div class="task">${esc(j.task)}</div>
       <div class="meta">${esc(j.harness)} · ${esc(j.model||'—')}${j.cloned?' · clone':''}</div>
@@ -167,7 +168,7 @@ async function detail(id) {
      <dt>harness</dt><dd>${esc(j.harness)}</dd>
      <dt>model</dt><dd>${esc(j.model||'—')}</dd>
      <dt>routed by</dt><dd>${esc(j.routed_by)}</dd>
-     <dt>state</dt><dd><span class="pill s-${j.state}">${j.state}</span>${j.exit_code!=null?' exit '+j.exit_code:''}</dd>
+     <dt>state</dt><dd><span class="pill s-${j.state}">${j.state === 'no_files' ? 'no output' : j.state}</span>${j.exit_code!=null?' exit '+j.exit_code:''}</dd>
      <dt>started</dt><dd>${esc(j.started||'—')}</dd>
      <dt>finished</dt><dd>${esc(j.finished||'—')}</dd>
      ${j.error?`<dt>error</dt><dd style="color:var(--bad)">${esc(j.error)}</dd>`:''}
@@ -176,6 +177,7 @@ async function detail(id) {
    ${(j.state==='running'||j.state==='queued')?
      `<button class="ghost" onclick="act('${j.id}','cancel')">Cancel (stops the harness)</button>`:
      `<button class="ghost" onclick="act('${j.id}','forget')">Remove from list</button>`}
+   ${j.answer?`<h3 style="font-size:13px">answer</h3><pre style="white-space:pre-wrap">${esc(j.answer)}</pre>`:''}
    ${files?`<h3 style="font-size:13px">delivered</h3><ul>${files}</ul>`:''}
    <h3 style="font-size:13px">output log</h3>
    <pre>${esc(log || '—')}</pre>`;

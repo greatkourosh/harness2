@@ -143,8 +143,46 @@ class JobStoreTests(unittest.TestCase):
             self.assertEqual(final["exit_code"], 1)
             self.assertIn("1", final["error"])
 
-    def test_success_needs_both_exit_zero_and_a_deliverable(self):
-        """Exit 0 with nothing delivered is the silent-success case; not a pass."""
+    def test_a_prose_answer_is_a_done_task(self):
+        """A question answered in prose is FINISHED work, not a failure.
+
+        "hey" writes no file; the reply is the deliverable. The job must end
+        `done` and carry that reply, so the panel can show what was said instead
+        of reporting an empty run and reading as a broken tool.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "proj").mkdir()
+
+            def answered(**kw):
+                run_dir = Path(kw["results_root"]) / kw["run_id"]
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "metrics.json").write_text(
+                    json.dumps(
+                        {"exit_code": 0, "delivered": [], "answer": "Hey. What you need?"}
+                    ),
+                    encoding="utf-8",
+                )
+                return run_dir
+
+            store = self._store(root / "runs")
+            with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+                jobs.ER, "run_one", side_effect=answered
+            ):
+                job = store.submit("hey", "proj")
+                for _ in range(200):
+                    if store.get(job["id"])["state"] in ("done", "no_files", "failed"):
+                        break
+                    import time
+
+                    time.sleep(0.02)
+                final = store.get(job["id"])
+            self.assertEqual(final["state"], "done")
+            self.assertEqual(final["answer"], "Hey. What you need?")
+            self.assertEqual(final["error"], "", "a clean run must not carry an error")
+
+    def test_exit_zero_with_no_answer_and_no_file_is_not_a_failure(self):
+        """Silent but clean still ran: `no_files`, never `failed`."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "proj").mkdir()
@@ -163,13 +201,14 @@ class JobStoreTests(unittest.TestCase):
             ):
                 job = store.submit("nothing doing", "proj")
                 for _ in range(200):
-                    if store.get(job["id"])["state"] in ("done", "failed"):
+                    if store.get(job["id"])["state"] in ("done", "no_files", "failed"):
                         break
                     import time
 
                     time.sleep(0.02)
                 final = store.get(job["id"])
-            self.assertEqual(final["state"], "failed")
+            self.assertEqual(final["state"], "no_files")
+            self.assertEqual(final["exit_code"], 0)
 
     def test_forget_removes_a_finished_job_only(self):
         """A job still in flight must not be dropped from the list under the UI."""

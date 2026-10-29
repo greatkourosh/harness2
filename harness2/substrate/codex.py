@@ -404,14 +404,142 @@ def _render_rollout_payload(
         _emit_if(lines, "REASONING", _text_of(payload), obs_trunc)
 
 
+def _iter_json_lines(raw: str):
+    """Yield every JSON object line, whatever the field order inside it (junk skipped).
+
+    Claude's serializer writes `type` LAST, so its `result` event begins
+    `{"duration_api_ms":...` and never matches the `{"type":` prefix the codex walk
+    keys on. Anything reading a claude stream must therefore parse by prefix "{"
+    alone. The codex paths keep their own stricter rule and are untouched.
+    """
+    for ln in raw.replace("\x00", "").splitlines():
+        ln = ln.strip()
+        if not ln.startswith("{"):
+            continue
+        try:
+            ev = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(ev, dict):
+            yield ev
+
+
+def _claude_stream_text(path: Path) -> str | None:
+    """The raw text when this is a `claude -p --output-format stream-json` stream, else None.
+
+    Told apart from the codex shapes by its terminal `result` event, or by an
+    `assistant` event carrying a nested `message` object. Codex emits neither, so
+    this reads the stream twice rather than risk routing a codex stream here and
+    rendering it as a sequence of unknowns.
+    """
+    try:
+        raw = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for ev in _iter_json_lines(raw):
+        if ev.get("type") == "result":
+            return raw
+        if ev.get("type") == "assistant" and isinstance(ev.get("message"), dict):
+            return raw
+    return None
+
+
+def _render_claude_content(block: dict, lines: list[str], obs_trunc: int, args_trunc: int) -> None:
+    """One content block of a claude assistant message, in the shared grammar."""
+    btype = block.get("type", "")
+    if btype == "text":
+        _emit_if(lines, "ASSISTANT", block.get("text"), obs_trunc)
+    elif btype == "thinking":
+        _emit_if(lines, "REASONING", block.get("thinking"), obs_trunc)
+    elif btype == "tool_use":
+        name = block.get("name") or "tool"
+        _emit(lines, f"[ACTION] {name}: {_clip(block.get('input'), args_trunc)}")
+    elif btype == "tool_result":
+        body = _text_of(block.get("content"))
+        _emit(lines, f"[OBSERVATION] {_clip(body, obs_trunc)}")
+
+
+def render_claude_events(path: Path, raw: str, *, obs_trunc: int, max_chars: int,
+                         args_trunc: int) -> str:
+    """Render a claude stream-json capture into the shared [ACTION]/[OBSERVATION] grammar."""
+    lines: list[str] = []
+    for ev in _iter_json_lines(raw):
+        et = ev.get("type")
+
+        if et == "assistant":
+            msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+            for block in msg.get("content") or []:
+                if isinstance(block, dict):
+                    _render_claude_content(block, lines, obs_trunc, args_trunc)
+            # An event-level error is the whole record of an auth/transport failure:
+            # the assistant message beside it is the synthetic "<synthetic>" one.
+            if ev.get("error"):
+                _emit(lines, f"[ERROR] {_clip(ev.get('error'), 1000)}")
+            continue
+
+        # The nested tool result arrives as a *user* event, not an assistant one.
+        if et == "user":
+            msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+            for block in msg.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    _render_claude_content(block, lines, obs_trunc, args_trunc)
+            continue
+
+        if et == "result":
+            u = ev.get("usage") if isinstance(ev.get("usage"), dict) else {}
+            details = u.get("output_tokens_details")
+            lines.append(
+                "[HARNESS] result | turns={t} tokens in={i} cached={c} out={o} "
+                "reasoning={r} cost_usd={cost} is_error={err}".format(
+                    t=ev.get("num_turns"),
+                    i=u.get("input_tokens"),
+                    c=(_int_or_zero(u.get("cache_read_input_tokens"))
+                       + _int_or_zero(u.get("cache_creation_input_tokens"))),
+                    o=u.get("output_tokens"),
+                    r=(details or {}).get("thinking_tokens") if isinstance(details, dict) else None,
+                    cost=ev.get("total_cost_usd"),
+                    err=bool(ev.get("is_error")),
+                )
+            )
+            if ev.get("is_error"):
+                _emit(lines, f"[ERROR] {_clip(ev.get('result'), 1000)}")
+            continue
+
+        if et == "error":
+            _emit(lines, f"[ERROR] {_clip(_text_of(ev) or ev.get('message'), 1000)}")
+
+    rendered = "\n".join(lines).strip()
+    if not rendered:
+        return "(no parseable events in trajectory)"
+    if len(rendered) > max_chars:
+        dropped = len(rendered) - max_chars
+        rendered = rendered[:max_chars] + "\n" + _TRUNC_FMT.format(n=dropped)
+    return rendered
+
+
+def _int_or_zero(v) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def render_events(path: Path, *, obs_trunc: int, max_chars: int, args_trunc: int = 2000) -> str:
     """Render a codex exec/rollout stream into the shared grammar.
+
+    A claude stream-json capture shares that grammar but not that schema, so it is
+    routed to its own renderer before the codex walk below.
 
     `obs_trunc` and `max_chars` come from the cell's BenchSpec. Tool input is clipped at
     `args_trunc`, a codex-substrate default that BenchSpec does not carry and no caller
     overrides -- a signature default rather than a module constant, so a future caller can
     thread it without touching this function.
     """
+    raw = _claude_stream_text(path)
+    if raw is not None:
+        return render_claude_events(path, raw, obs_trunc=obs_trunc, max_chars=max_chars,
+                                    args_trunc=args_trunc)
+
     lines: list[str] = []
     for ev in parse_items(Path(path)):
         et = ev.get("type", "")

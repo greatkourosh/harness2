@@ -86,9 +86,12 @@ def check(adapter, *, judge=False) -> list[str]:
                 f"9router provider block missing at {provider}; run harness2-setup {bench}"
             )
 
-    if any(
-        m.startswith("google-vertex") for m in (config.SOLVER_MODEL_OC, config.IMPROVER_MODEL)
-    ) or (judge and (bench == "wb" or config.JUDGE_MODEL.startswith(("claude", "gemini")))):
+    # ADC is a Vertex requirement, so it is checked only when some role actually
+    # routes through Vertex. The `bench == "wb"` clause used to force it for every
+    # WorkBuddy cell, which demanded Google credentials from a 9router-only setup
+    # that never contacts Vertex -- a first-run blocker for that whole config.
+    vertex_roles = (config.SOLVER_MODEL_OC, config.IMPROVER_MODEL, config.JUDGE_MODEL)
+    if any(m.startswith("google-vertex") for m in vertex_roles):
         probe(
             "Google Application Default Credentials",
             ["gcloud", "auth", "application-default", "print-access-token"],
@@ -141,13 +144,23 @@ def check(adapter, *, judge=False) -> list[str]:
             ],
             cwd=repo,
         )
+        # The written name depends on the route: a Vertex route is namespaced
+        # `google/<model>` while a 9router route carries the gateway's own id
+        # verbatim. Accepting only the Vertex form reported a correct 9router
+        # setup as stale, which blocks every 9router user before their first run.
+        routes_9router = config.SOLVER_MODEL_OC.startswith("9router/")
         for role, expected in (
             ("solver", config.SOLVER_MODEL_OC.removeprefix("google-vertex/")),
             ("judge", config.JUDGE_MODEL),
         ):
+            if routes_9router:
+                expected = expected.removeprefix("9router/")
+                acceptable = {expected}
+            else:
+                acceptable = {"google/" + expected}
             path = repo / "configs/models/harness2" / f"{role}.yaml"
             try:
-                if json.loads(path.read_text())["model"]["name"] != "google/" + expected:
+                if json.loads(path.read_text())["model"]["name"] not in acceptable:
                     errors.append(f"WorkBuddy {role} configuration is stale; rerun setup")
             except (OSError, ValueError, KeyError, TypeError):
                 errors.append(f"WorkBuddy {role} configuration missing; rerun setup")

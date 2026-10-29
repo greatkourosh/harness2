@@ -22,6 +22,9 @@ change what the oc and cx cells do.
 
 from __future__ import annotations
 
+import importlib.util
+import json
+import sys
 import tempfile
 import types
 import unittest
@@ -33,6 +36,7 @@ from harness2.benchmarks import lab as LAB
 from harness2.cli._common import make_adapter
 from harness2.core import tree as HT
 from harness2.substrate.codex import CodexSubstrate
+from harness2.substrate.codex import render_events as render_codex_events
 from harness2.substrate.external_cli import ExternalCliSubstrate
 from harness2.substrate.opencode import OpencodeSubstrate
 
@@ -228,6 +232,257 @@ class PromptSentinel(unittest.TestCase):
             f'PROMPT_SENTINEL = "{LAB._PROMPT_SENTINEL}"',
             runner.read_text(encoding="utf-8"),
         )
+
+
+# A real `claude -p --output-format stream-json --verbose` capture, trimmed to the
+# events that matter: init, a thinking+tool_use turn, the nested tool_result user
+# event, a final text turn, and the terminal result. Both field orders are
+# represented exactly as claude writes them -- `type` is LAST in the result event,
+# which is what a `{"type":` prefix filter silently drops.
+_CLAUDE_JSONL = "\n".join([
+    json.dumps({"type": "system", "subtype": "init", "cwd": "/tmp/ws",
+                "tools": ["Write", "Bash"], "model": "claude-opus-5[1m]"}),
+    json.dumps({"type": "assistant", "message": {
+        "id": "msg_1", "role": "assistant", "content": [
+            {"type": "thinking", "thinking": "Trivial. Just write it."},
+            {"type": "tool_use", "id": "tu_1", "name": "Write",
+             "input": {"file_path": "/tmp/ws/output/hello.txt", "content": "hi\n"}},
+        ],
+        "usage": {"input_tokens": 0, "output_tokens": 0}}}, sort_keys=True),
+    json.dumps({"type": "user", "message": {
+        "role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu_1",
+             "content": "File created successfully at: /tmp/ws/output/hello.txt"}]}}),
+    json.dumps({"type": "assistant", "message": {
+        "id": "msg_2", "role": "assistant", "content": [
+            {"type": "thinking", "thinking": "Done."},
+            {"type": "text", "text": "`hello.txt` written, contains `hi`."}],
+        "usage": {"input_tokens": 0, "output_tokens": 0}}}, sort_keys=True),
+    # sort_keys puts `type` last here, exactly as claude's own serializer does.
+    json.dumps({"duration_api_ms": 10516, "is_error": False, "num_turns": 2,
+                "result": "`hello.txt` written, contains `hi`.",
+                "session_id": "s1", "subtype": "success", "total_cost_usd": 0.17,
+                "usage": {"input_tokens": 68352, "output_tokens": 42,
+                          "cache_creation_input_tokens": 100,
+                          "cache_read_input_tokens": 200,
+                          "output_tokens_details": {"thinking_tokens": 7}},
+                "type": "result"}, sort_keys=True),
+]) + "\n"
+
+# The same stream cut off before its terminal result event: a rollout killed mid-turn.
+_CLAUDE_TRUNCATED_JSONL = "\n".join(_CLAUDE_JSONL.splitlines()[:-1]) + "\n"
+
+# An auth failure: claude still emits an assistant event, with an error field and a
+# synthetic message, then a result event carrying is_error.
+_CLAUDE_ERROR_JSONL = "\n".join([
+    json.dumps({"type": "assistant", "error": "authentication_failed",
+                "message": {"id": "x", "role": "assistant",
+                            "content": [{"type": "text",
+                                         "text": "Not logged in · Please run /login"}],
+                            "usage": {"input_tokens": 0, "output_tokens": 0}}},
+               sort_keys=True),
+    json.dumps({"is_error": True, "num_turns": 1, "result": "Not logged in · Please run /login",
+                "terminal_reason": "api_error", "type": "result",
+                "usage": {"input_tokens": 0, "output_tokens": 0}}, sort_keys=True),
+]) + "\n"
+
+# A codex-shaped stream, to prove the codex path is untouched by the claude support.
+_CODEX_JSONL = "\n".join([
+    json.dumps({"type": "item.completed", "item": {
+        "id": "i1", "type": "command_execution", "command": "ls -la",
+        "aggregated_output": "total 0\n", "exit_code": 0, "status": "completed"}}),
+    json.dumps({"type": "item.completed", "item": {
+        "id": "i2", "type": "agent_message", "text": "done"}}),
+    json.dumps({"type": "turn.completed", "usage": {
+        "input_tokens": 100, "cached_input_tokens": 20, "output_tokens": 5,
+        "reasoning_output_tokens": 1}}),
+]) + "\n"
+
+
+def _load_runner():
+    """The real LAB runner module, with only `external.tts_lab.config` stubbed.
+
+    parse_session is pure over the capture text, so the stubs exist solely to let the
+    module import; nothing here reimplements it.
+    """
+    path = (Path(LAB.__file__).resolve().parents[2] / "third_party" / "lab_runner"
+            / "adapt_runs_cx" / "run_codex_lab.py")
+    if not path.is_file():
+        raise unittest.SkipTest(f"runner not present at {path}")
+    cfg = types.ModuleType("external.tts_lab.config")
+    cfg.documents_dir = lambda t: Path("/nonexistent")
+    cfg.task_json = lambda t: {}
+    pkg = types.ModuleType("external")
+    ttslab = types.ModuleType("external.tts_lab")
+    ttslab.config = cfg
+    saved = {k: sys.modules.get(k) for k in
+             ("external", "external.tts_lab", "external.tts_lab.config")}
+    sys.modules.update({"external": pkg, "external.tts_lab": ttslab,
+                        "external.tts_lab.config": cfg})
+    try:
+        spec = importlib.util.spec_from_file_location("_lab_runner_under_test", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+    return mod
+
+
+class ClaudeStreamParsing(unittest.TestCase):
+    """parse_session over claude's real stream-json schema.
+
+    The bug these pin: usage lives ONLY on the terminal `result` event, whose `type`
+    field claude writes last -- so a `{"type":` prefix filter drops it and the run
+    reports zero tokens while looking perfectly healthy.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = _load_runner()
+
+    def _parse(self, raw: str) -> dict:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "claude-code_session.jsonl"
+            p.write_text(raw, encoding="utf-8")
+            return self.runner.parse_session(p)
+
+    def test_usage_taken_from_the_result_event(self):
+        got = self._parse(_CLAUDE_JSONL)
+        self.assertTrue(got["usage_present"])
+        self.assertEqual(got["input_tokens"], 68352)
+        self.assertEqual(got["output_tokens"], 42)
+
+    def test_tokens_are_not_double_counted(self):
+        """Assistant events carry an all-zero usage; summing them must not shift the
+        totals, and summing them WITH the result event must not inflate them."""
+        got = self._parse(_CLAUDE_JSONL)
+        self.assertEqual(got["input_tokens"], 68352, "assistant usage leaked into the total")
+        self.assertEqual(got["output_tokens"], 42)
+
+    def test_turns_and_tool_calls_come_from_their_own_places(self):
+        got = self._parse(_CLAUDE_JSONL)
+        self.assertEqual(got["turns"], 2, "num_turns on the result event")
+        self.assertEqual(got["tool_calls"], 1, "tool_use blocks in assistant events")
+        self.assertEqual(got["errors"], 0)
+
+    def test_final_text_prefers_the_result_summary(self):
+        got = self._parse(_CLAUDE_JSONL)
+        self.assertEqual(got["final_text"], "`hello.txt` written, contains `hi`.")
+
+    def test_cached_input_sums_both_cache_figures(self):
+        got = self._parse(_CLAUDE_JSONL)
+        self.assertEqual(got["cached_input_tokens"], 300, "100 creation + 200 read")
+        self.assertEqual(got["reasoning_output_tokens"], 7)
+
+    def test_truncated_stream_reports_usage_absent_not_zero(self):
+        """A rollout killed before its result event: the figures are ABSENT, and a caller
+        must be able to tell that from a real zero-token run."""
+        got = self._parse(_CLAUDE_TRUNCATED_JSONL)
+        self.assertFalse(got["usage_present"])
+        self.assertEqual(got["input_tokens"], 0)
+        self.assertEqual(got["tool_calls"], 1, "the tool call still happened")
+        self.assertGreater(got["n_events"], 1, "the stream was parseable, just unfinished")
+
+    def test_prose_stream_is_not_read_as_a_claude_stream(self):
+        """A harness printing prose must fall to the codex branch and report nothing,
+        not be misread as a claude stream with absent usage."""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "pi_session.jsonl"
+            p.write_text("just some prose\nthe agent said things\n", encoding="utf-8")
+            got = self.runner.parse_session(p)
+        self.assertEqual(got["n_events"], 0)
+        self.assertNotIn("usage_present", got, "prose is the codex branch's cold case")
+
+    def test_error_stream_is_counted(self):
+        got = self._parse(_CLAUDE_ERROR_JSONL)
+        self.assertGreaterEqual(got["errors"], 1)
+        self.assertTrue(got["usage_present"], "a failed run still reports its usage")
+
+
+class ClaudeStreamRendering(unittest.TestCase):
+    """render_events over claude's schema, and the codex path beside it."""
+
+    def _render(self, raw: str) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "claude-code_session.jsonl"
+            p.write_text(raw, encoding="utf-8")
+            return render_codex_events(p, obs_trunc=500, max_chars=10 ** 6)
+
+    def test_no_longer_renders_as_no_parseable_events(self):
+        self.assertNotIn("(no parseable events", self._render(_CLAUDE_JSONL))
+
+    def test_text_tool_and_result_are_all_rendered(self):
+        out = self._render(_CLAUDE_JSONL)
+        self.assertIn("[ASSISTANT] `hello.txt` written", out)
+        self.assertIn("[ACTION] Write:", out)
+        self.assertIn("[OBSERVATION] File created successfully", out)
+        self.assertIn("[REASONING] Trivial.", out)
+
+    def test_result_line_carries_the_token_totals(self):
+        out = self._render(_CLAUDE_JSONL)
+        self.assertIn("turns=2", out)
+        self.assertIn("in=68352", out)
+        self.assertIn("out=42", out)
+        self.assertIn("cached=300", out)
+
+    def test_error_stream_surfaces_the_failure(self):
+        out = self._render(_CLAUDE_ERROR_JSONL)
+        self.assertIn("[ERROR]", out)
+        self.assertIn("authentication_failed", out)
+
+    def test_truncated_stream_renders_what_arrived(self):
+        """No result event, so no [HARNESS] line -- but the work is still visible."""
+        out = self._render(_CLAUDE_TRUNCATED_JSONL)
+        self.assertNotIn("(no parseable events", out)
+        self.assertIn("[ACTION] Write:", out)
+        self.assertNotIn("[HARNESS] result", out)
+
+    def test_codex_stream_is_rendered_exactly_as_before(self):
+        """The claude branch must not capture codex's shape: codex writes `type` first
+        and has no `assistant`/`result` events."""
+        out = self._render(_CODEX_JSONL)
+        self.assertIn("[ACTION] shell: ls -la", out)
+        self.assertIn("[ASSISTANT] done", out)
+        self.assertIn("[HARNESS] turn completed", out)
+        self.assertIn("tokens in=100", out)
+
+    def test_codex_parser_unchanged(self):
+        runner = _load_runner()
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "codex_session.jsonl"
+            p.write_text(_CODEX_JSONL, encoding="utf-8")
+            got = runner.parse_session(p)
+        self.assertEqual(got["turns"], 1)
+        self.assertEqual(got["input_tokens"], 100)
+        self.assertEqual(got["cached_input_tokens"], 20)
+        self.assertEqual(got["output_tokens"], 5)
+        self.assertEqual(got["tool_calls"], 1)
+        self.assertEqual(got["final_text"], "done")
+        self.assertNotIn("usage_present", got, "the codex branch keeps its own key set")
+
+
+class ClaudeManifest(unittest.TestCase):
+    def test_headless_asks_for_structured_output(self):
+        """Without these flags the capture is prose and the renderer stays blind."""
+        spec = __import__("harness2.harnesses.registry", fromlist=["x"]).load_one("claude-code")
+        self.assertIn("--output-format", spec.headless)
+        self.assertIn("stream-json", spec.headless)
+        self.assertIn("--verbose", spec.headless)
+        self.assertIn("{prompt}", spec.headless)
+
+    def test_permission_mode_allows_bash(self):
+        """acceptEdits is not enough: it denies `python3 scripts/read_doc.py`, which is
+        how LAB reads every binary document, so such a rollout delivers nothing. The
+        manifest must keep a mode that lets Bash run."""
+        spec = __import__("harness2.harnesses.registry", fromlist=["x"]).load_one("claude-code")
+        self.assertIn("--permission-mode", spec.headless)
+        mode = spec.headless[spec.headless.index("--permission-mode") + 1]
+        self.assertIn(mode, ("auto", "bypassPermissions"), "acceptEdits blocks the LAB work")
+        self.assertNotEqual(mode, "acceptEdits")
 
 
 if __name__ == "__main__":

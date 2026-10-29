@@ -267,13 +267,24 @@ def cmd_do(args) -> int:
         if meta.is_file():
             metrics = json.loads(meta.read_text(encoding="utf-8"))
         delivered = metrics.get("delivered") or []
-        if metrics.get("exit_code") == 0 and delivered:
-            attempts.append((spec.id, f"delivered {delivered}"))
-            print(f"  ok — delivered {delivered}")
+        answer = metrics.get("answer") or ""
+        # A clean run is a success whether it wrote a file or answered in prose.
+        # Requiring a deliverable made `do "what does this file do?"` report
+        # "every harness failed" for a run that exited 0 and gave a good answer.
+        if metrics.get("exit_code") == 0 and (delivered or answer):
+            if delivered:
+                print(f"  ok — delivered {delivered}")
+            else:
+                print("  ok — answered (no file written)")
+            if answer:
+                print("  answer:")
+                for line in answer.splitlines():
+                    print(f"    {line}")
             print(f"  run dir: {run_dir}")
             print(f"  routed by: {first.reason}")
             for hid, note in attempts[:-1]:
                 print(f"  (tried {hid}: {note})")
+            attempts.append((spec.id, "answered" if answer else f"delivered {delivered}"))
             return 0
         why = (
             f"exit {metrics.get('exit_code')}"

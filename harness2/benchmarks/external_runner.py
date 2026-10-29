@@ -72,6 +72,12 @@ def _read_metrics_stream(session: Path, harness: str) -> dict:
         return {}
     turns = 0
     tokens_in = tokens_out = 0
+    # claude's terminal `result` event carries the authoritative totals for the whole
+    # session (`num_turns` plus one usage object); its per-assistant events report an
+    # all-zero usage and no turn marker. Reading those totals first keeps the figures
+    # right AND avoids double-counting should a harness report both.
+    declared_turns = None
+    final_usage = None
     for line in session.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -85,15 +91,64 @@ def _read_metrics_stream(session: Path, harness: str) -> dict:
         etype = ev.get("type") or ev.get("event") or ""
         if etype in ("step_finish", "turn.completed", "message_stop"):
             turns += 1
+        if isinstance(ev.get("num_turns"), int):
+            declared_turns = ev["num_turns"]
         usage = ev.get("usage") or (ev.get("part") or {}).get("tokens")
         if isinstance(usage, dict):
             tokens_in += int(usage.get("input") or usage.get("input_tokens") or 0)
             tokens_out += int(usage.get("output") or usage.get("output_tokens") or 0)
+            if etype == "result":
+                final_usage = (
+                    int(usage.get("input") or usage.get("input_tokens") or 0),
+                    int(usage.get("output") or usage.get("output_tokens") or 0),
+                )
+    if final_usage is not None:
+        tokens_in, tokens_out = final_usage
     return {
-        "turn_count": turns or None,
+        "turn_count": declared_turns or turns or None,
         "input_tokens": tokens_in or None,
         "output_tokens": tokens_out or None,
+        "answer": _final_text(session) or None,
     }
+
+
+def _final_text(session: Path) -> str:
+    """The harness's own closing message, whatever it calls it.
+
+    A task need not write a file: "hey" is answered in prose, and that prose IS
+    the deliverable. Without this the panel can only report the file names a run
+    produced, so a conversational task looks like it produced nothing. Every
+    shape here carries its closing text in a different place, so each is read
+    where it actually lives rather than guessed at.
+    """
+    if not session.is_file():
+        return ""
+    raw = session.read_text(encoding="utf-8", errors="replace")
+    last_result, last_item_text = "", ""
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        etype = ev.get("type") or ev.get("event") or ""
+        # claude: the terminal result event's `result` is the closing message.
+        if etype == "result" and isinstance(ev.get("result"), str) and ev["result"].strip():
+            last_result = ev["result"]
+            continue
+        # codex and opencode: a thread item / part carrying text.
+        item = ev.get("item") if isinstance(ev.get("item"), dict) else ev.get("part")
+        if isinstance(item, dict):
+            itype = item.get("type", "")
+            text = item.get("text") or item.get("content")
+            if itype in ("agent_message", "text", "message") and isinstance(text, str) \
+                    and text.strip():
+                last_item_text = text
+    return (last_result or last_item_text).strip()
 
 def run_one(
     *,

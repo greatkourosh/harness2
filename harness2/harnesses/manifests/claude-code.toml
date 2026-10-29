@@ -17,11 +17,30 @@ adapter = "claude-code"
 key_name = "claude_code_cli"
 
 binary = "claude"
-# `--permission-mode acceptEdits` is required headlessly: with the default mode
-# every file write is held for approval, and a `-p` run has nobody to approve
-# it, so the agent reports success while delivering nothing. acceptEdits
-# auto-approves edits without the full `--dangerously-skip-permissions` bypass.
-headless = ["-p", "{prompt}", "--permission-mode", "acceptEdits"]
+# `--permission-mode auto` is required headlessly, NOT `acceptEdits`. Measured:
+# under acceptEdits the agent is denied every command outside a small safe-command
+# allowlist -- `echo` passes, `python3 -c`, `unzip -l`, `pandoc` and `awk` do not
+# (0 allowed / 1 denied on a three-command probe; auto: 3/3). LAB cannot work that
+# way, because reading a binary document IS `python3 scripts/read_doc.py <path>`.
+# A real rollout spent its whole 5400s wall on 322 such denials and delivered only
+# a scratch file. `auto` lets Bash run while still classifying each command, and
+# unlike `bypassPermissions` it keeps the classifier in the loop; the workspace is
+# a per-run scratch dir, which is the posture the codex cell already takes
+# (it runs `codex exec --dangerously-bypass-approvals-and-sandbox`).
+#
+# `--output-format stream-json` (which requires `--verbose` under --print) turns
+# the prose into one JSON event per line, so the capture stream carries structure
+# the shared renderer and the runner's parse_session can read -- without it the
+# trajectory renders as "(no parseable events in trajectory)" and turn/token
+# metrics are absent. Both `harness2-harness bench` and the LAB runner capture
+# that stream to <harness>_session.jsonl, so the structure lands on disk rather
+# than the terminal.
+headless = [
+  "-p", "{prompt}",
+  "--permission-mode", "auto",
+  "--output-format", "stream-json",
+  "--verbose",
+]
 model_flag = "--model"
 trace_glob = "~/.claude/projects/**/*.jsonl"
 skills_dir = "~/.claude/skills"
