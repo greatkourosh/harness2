@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>botkeep — Halloween Free</title>
+<style>
+  :root {
+    color-scheme: light;
+    --plane:      #f9f9f7;
+    --surface-1:  #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --muted:      #898781;
+    --rule:       #e1e0d9;
+    --ring:       rgba(11,11,11,0.10);
+    --accent:     #2a78d6;
+    --good:       #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --plane:      #0d0d0d;
+      --surface-1:  #1a1a19;
+      --text-primary:   #f0efec;
+      --text-secondary: #c3c2b7;
+      --muted:      #898781;
+      --rule:       #2c2c2a;
+      --ring:       rgba(255,255,255,0.10);
+      --accent:     #3987e5;
+      --good:       #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane:      #0d0d0d;
+    --surface-1:  #1a1a19;
+    --text-primary:   #f0efec;
+    --text-secondary: #c3c2b7;
+    --muted:      #898781;
+    --rule:       #2c2c2a;
+    --ring:       rgba(255,255,255,0.10);
+    --accent:     #3987e5;
+    --good:       #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 48px 24px 64px;
+    background: var(--plane);
+    color: var(--text-primary);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  header { margin-bottom: 36px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 10px;
+  }
+  h1 { font-size: 30px; font-weight: 600; margin: 0 0 12px; letter-spacing: -.01em; }
+  .sub { color: var(--text-secondary); margin: 0; }
+  .sub a { color: var(--accent); text-decoration: none; }
+  .sub a:hover { text-decoration: underline; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    margin-top: 16px; padding: 5px 11px 5px 9px;
+    border: 1px solid var(--ring); border-radius: 999px;
+    background: var(--surface-1);
+    font-size: 13px; color: var(--text-secondary);
+  }
+  .chip svg { flex: none; }
+  .chip b { color: var(--text-primary); font-weight: 600; }
+
+  h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--muted);
+    margin: 0 0 12px;
+  }
+
+  .kpis {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    margin-bottom: 28px;
+  }
+  .tile {
+    background: var(--surface-1);
+    border: 1px solid var(--ring);
+    border-radius: 10px;
+    padding: 16px 18px 18px;
+  }
+  .tile .label { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; }
+  .tile .value {
+    font-size: 34px; font-weight: 600; line-height: 1.1;
+    letter-spacing: -.02em;
+  }
+  .tile .value .unit {
+    font-size: 17px; font-weight: 500; color: var(--text-secondary);
+    margin-left: 3px; letter-spacing: 0;
+  }
+  .tile .note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+  .callout {
+    background: var(--surface-1);
+    border: 1px solid var(--ring);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 28px;
+  }
+  .callout p { margin: 0 0 10px; color: var(--text-secondary); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout strong { color: var(--text-primary); font-weight: 600; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td {
+    text-align: left; padding: 9px 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th { font-weight: 600; color: var(--text-secondary); font-size: 12px;
+       letter-spacing: .05em; text-transform: uppercase; }
+  td.n { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td:first-child { color: var(--text-secondary); padding-right: 16px; }
+  tr:last-child td { border-bottom: 0; }
+  footer { margin-top: 36px; font-size: 12px; color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">botkeep.cloud</p>
+    <h1>Halloween Free</h1>
+    <p class="sub">
+      Account <strong>aryannegarnojan2026@gmail.com</strong> — connected via GitHub.
+      Panel at <a href="https://botkeep.cloud/app">botkeep.cloud/app</a>.
+    </p>
+    <span class="chip">
+      <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+        <circle cx="8" cy="8" r="7" fill="none" stroke="var(--good)" stroke-width="2"/>
+        <path d="M4.8 8.3l2.1 2.1 4.3-4.4" fill="none" stroke="var(--good)"
+              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      Active · promo until <b>29 Jan 2027</b>
+    </span>
+  </header>
+
+  <h2>Quotas</h2>
+  <div class="kpis">
+    <div class="tile">
+      <div class="label">Server slots</div>
+      <div class="value">3</div>
+    </div>
+    <div class="tile">
+      <div class="label">Total RAM</div>
+      <div class="value">1<span class="unit">GB</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">Total CPU</div>
+      <div class="value">1<span class="unit">vCore</span></div>
+    </div>
+    <div class="tile">
+      <div class="label">Total storage</div>
+      <div class="value">1<span class="unit">GB</span></div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <p>
+      <strong>Shared, not multiplied.</strong> The RAM, CPU and storage totals are
+      one pool across all servers — three slots do not mean three times the
+      resources.
+    </p>
+    <p>
+      <strong>No files deleted on expiry.</strong> When the promo ends the original
+      Free conditions return with no charge and no manual renewal. If usage then
+      exceeds the Free quotas, servers are <em>stopped</em> until allocations fit.
+    </p>
+  </div>
+
+  <h2>At a glance</h2>
+  <table>
+    <thead>
+      <tr><th>Field</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Plan</td><td>Halloween Free</td></tr>
+      <tr><td>Active until</td><td class="n">29 / 01 / 2027</td></tr>
+      <tr><td>Server slots</td><td class="n">3</td></tr>
+      <tr><td>Total RAM</td><td class="n">1 GB</td></tr>
+      <tr><td>Total CPU</td><td class="n">1 vCore</td></tr>
+      <tr><td>Total storage</td><td class="n">1 GB</td></tr>
+      <tr><td>On overrun</td><td>Servers stopped until allocations fit</td></tr>
+      <tr><td>On expiry</td><td>Original Free conditions return; no charge</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    Snapshot of the plan page. Check the panel for current allocations and usage.
+  </footer>
+</div>
+</html>
