@@ -54,7 +54,7 @@ the user's own file, often carrying settings this package knows nothing about.
 | `pi` | `~/.pi/agent/models.json` | `pi --print` | routing combos |
 | `opencode` | `~/.config/opencode/opencode.json` | `opencode run` | Claude |
 | `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `qwen*`/`glm*`/`deepseek*` |
-| `claude-code` | `~/.claude/settings.json` | `claude -p` | Claude |
+| `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
 
 `claude-desktop` is inventory-only: the Electron app has no flag that takes a
@@ -274,6 +274,13 @@ harness2-harness bench claude-code "Summarize documents/report.pdf" \
     <harness>_session.jsonl   the captured stream
     metrics.json              turn/token/wall figures, written LAST as the completion mark
 ```
+
+`metrics.json` also carries **`answer`**, the harness's own closing message.
+A task need not write a file — a question is answered in prose, and that reply
+is the deliverable — so the closing message is recorded here for the task panel
+to show, and a clean run that produced only an answer counts as `done` rather
+than as an empty run. It is read from wherever the harness puts it: claude's
+terminal `result.result`, codex's last `agent_message` item.
 
 `harness2.substrate.ExternalCliSubstrate` is the underlying class. It is driven
 by the manifest: the argv comes from `headless`, the binary from `binary`, the

@@ -159,6 +159,15 @@ through successive Propose–Probe–Compose steps.
 | `--k K --mode parallel` | Probe `K` general and `K` domain-specific candidates, then produce `K` compositions |
 | `--k K --mode sequential` | Refine the harness through `K` successive steps |
 | `--substrate cx` | Use Codex instead of the default OpenCode executor |
+| `--substrate <id>` | LAB only: any registered harness as the executor (`harness2-harness list`) |
+
+JobBench and WorkBuddy-Bench run the two in-tree executors (`oc`, `cx`). LAB
+also accepts a registered harness id — `--bench lab --substrate claude-code` —
+which drives that harness headlessly through the same runner; see the
+[harness control plane](docs/HARNESSES.md) for which harnesses can run this way
+and what each one needs (the claude code manifest, for instance, must ask for
+structured output and a permission mode that lets Bash run, or the cell delivers
+nothing).
 
 After each task, harnessing-level recursion retains the adopted harness and
 evidence-supported lessons to guide future refinement. See the
