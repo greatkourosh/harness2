@@ -92,6 +92,11 @@ curl -s -X POST http://127.0.0.1:8090/api/tasks \
   -d '{"task":"find the failing test","project":"myrepo"}'
 ```
 
+`harness` and `model` are optional; leaving `harness` empty routes by the task
+text exactly as `harness2-harness do` does. The response is the new task's own
+view, including the `state` field described above and the `answer` once it
+settles.
+
 ## Cancel
 
 Cancel stops the task. The runner starts each harness in a session of its own

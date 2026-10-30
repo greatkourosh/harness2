@@ -214,6 +214,17 @@ harness2-harness do "draft a legal memo about this contract" --task-dir ./matter
   routed by: matched bug
 ```
 
+A task need not produce a file. Asking a question is a task, and the reply is
+its result, so `do` reports an answered run as the success it is and prints the
+answer:
+
+```
+→ claude-code  (model claude-sonnet-4-6)
+  ok — answered (no file written)
+  answer:
+    The parser drops the trailing token because …
+```
+
 `route` shows the decision without running anything:
 
 ```bash
@@ -243,9 +254,11 @@ Override the decision with `--harness pi`, or pin a model with `--model`.
 
 ### Falling back
 
-A harness that exits non-zero or delivers nothing is not a success, so `do`
-tries the next candidate in priority order — the task is what matters, not
-which agent ran it. Every attempt gets its own run directory
+A harness that exits non-zero is not a success, so `do` tries the next candidate
+in priority order — the task is what matters, not which agent ran it. A clean
+run counts as a success whether it delivered a file or answered in prose; only a
+non-zero exit (or no metrics at all) sends `do` on to the next candidate.
+Every attempt gets its own run directory
 (`<results-root>/<run-id>/<harness-id>/`), and the attempts are listed at the
 end. `--no-fallback` runs only the chosen harness.
 
