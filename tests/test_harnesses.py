@@ -366,6 +366,47 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(_resolve_model(spec, "some/explicit-id"), "some/explicit-id")
 
 
+class ModelGroupGlobs(unittest.TestCase):
+    """A group's globs must match the ids the gateway actually serves.
+
+    Gateway ids are namespaced (`bai/glm-5.3`, `Yeta/deepseek-v4.1-flash`), so a
+    leading-anchored pattern like `glm*` matches nothing and leaves that harness
+    with an empty model group -- it then cannot run at all, and the failure looks
+    like a provider problem rather than a glob one.
+    """
+
+    def test_the_deepseek_group_matches_namespaced_ids(self):
+        import fnmatch
+
+        spec = registry.load_one("deepseek")
+        real_ids = ["bai/glm-5.3", "Yeta/deepseek-v4.1-flash", "aikit/qwen-plus", "local"]
+        matched = [m for m in real_ids if any(fnmatch.fnmatch(m, p) for p in spec.allowed_models)]
+        self.assertIn("bai/glm-5.3", matched, "a namespaced glm id must be in the group")
+        self.assertIn("Yeta/deepseek-v4.1-flash", matched)
+        self.assertIn("aikit/qwen-plus", matched)
+
+    def test_a_family_glob_is_not_anchored_to_the_start(self):
+        """`glm*` is the bug; `*glm*` is the fix.
+
+        A family pattern exists to pick out ids of that family, and those ids are
+        namespaced, so it has to allow anything before the family name. A bare
+        `glm*` can only match an id that STARTS with it, which none do.
+
+        Exact ids and bare combos (`local`, `All`) are a different thing and are
+        matched literally -- only patterns carrying a `*` are checked here.
+        """
+        for name in ("deepseek", "pi", "claude-code"):
+            spec = registry.load_one(name)
+            for pat in spec.allowed_models:
+                if "*" not in pat:
+                    continue  # an exact id or a combo name, matched literally
+                self.assertTrue(
+                    pat.startswith("*") or "/" in pat or pat.endswith("*"),
+                    f"{name}: family pattern {pat!r} is anchored to the start and "
+                    f"cannot match a namespaced gateway id",
+                )
+
+
 class ContinuationFlags(unittest.TestCase):
     """Continuation is a manifest fact, not a guess.
 

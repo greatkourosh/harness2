@@ -131,13 +131,7 @@ class JobStoreTests(unittest.TestCase):
                 jobs.ER, "run_one", side_effect=fake_run_one
             ):
                 job = store.submit("fail please", "proj")
-                for _ in range(200):
-                    state = store.get(job["id"])["state"]
-                    if state in ("done", "failed"):
-                        break
-                    import time
-
-                    time.sleep(0.02)
+                store.join(timeout=30)
                 final = store.get(job["id"])
             self.assertEqual(final["state"], "failed")
             self.assertEqual(final["exit_code"], 1)
@@ -170,12 +164,7 @@ class JobStoreTests(unittest.TestCase):
                 jobs.ER, "run_one", side_effect=answered
             ):
                 job = store.submit("hey", "proj")
-                for _ in range(200):
-                    if store.get(job["id"])["state"] in ("done", "no_files", "failed"):
-                        break
-                    import time
-
-                    time.sleep(0.02)
+                store.join(timeout=30)
                 final = store.get(job["id"])
             self.assertEqual(final["state"], "done")
             self.assertEqual(final["answer"], "Hey. What you need?")
@@ -200,12 +189,7 @@ class JobStoreTests(unittest.TestCase):
                 jobs.ER, "run_one", side_effect=empty_success
             ):
                 job = store.submit("nothing doing", "proj")
-                for _ in range(200):
-                    if store.get(job["id"])["state"] in ("done", "no_files", "failed"):
-                        break
-                    import time
-
-                    time.sleep(0.02)
+                store.join(timeout=30)
                 final = store.get(job["id"])
             self.assertEqual(final["state"], "no_files")
             self.assertEqual(final["exit_code"], 0)
@@ -228,6 +212,8 @@ class JobStoreTests(unittest.TestCase):
                 jobs.ER, "run_one", side_effect=slow
             ):
                 job = store.submit("x", "proj")
+                # Wait for it to be RUNNING, not finished: the run_one stub holds
+                # the job open until `release`, which is what makes cancel meaningful.
                 for _ in range(200):
                     if store.get(job["id"])["state"] == "running":
                         break
@@ -235,10 +221,7 @@ class JobStoreTests(unittest.TestCase):
                 self.assertFalse(store.forget(job["id"]), "a running job is not forgettable")
                 self.assertTrue(store.cancel(job["id"]))
                 release.set()
-                for _ in range(200):
-                    if store.get(job["id"])["state"] == "failed":
-                        break
-                    time.sleep(0.02)
+                store.join(timeout=30)
             self.assertTrue(store.forget(job["id"]))
             self.assertIsNone(store.get(job["id"]))
 
@@ -316,12 +299,13 @@ class JobStoreTests(unittest.TestCase):
             jobs.ER, "run_one", side_effect=slow_then_success
         ):
             job = store.submit("will be cancelled", "proj")
-            for _ in range(100):
+            # Running, not finished: cancel must land while the work is in flight.
+            for _ in range(200):
                 if store.get(job["id"])["state"] == "running":
                     break
                 time.sleep(0.02)
             store.cancel(job["id"])
-            time.sleep(0.6)  # let the run thread finish and try to write `done`
+            store.join(timeout=30)  # let the run thread try to write `done`
             final = store.get(job["id"])
         self.assertEqual(final["state"], "failed", "a cancelled job must stay failed")
         self.assertTrue(final["cancelled"])
@@ -341,25 +325,13 @@ class ContinuationTests(unittest.TestCase):
         return jobs.JobStore(root=root)
 
     def _quiet(self, store: jobs.JobStore) -> None:
-        """Wait until no job is still running.
+        """Wait for every job thread, so a temp dir can be removed safely.
 
         Each submit starts a thread. Letting a temp dir be cleaned up while one
         is still writing makes the test flaky with `OSError: Directory not
         empty`, which says nothing about the behaviour under test.
         """
-        import time
-
-        for _ in range(400):
-            live = [
-                j
-                for j in store.list()
-                if j["state"] in ("running", "queued")
-            ]
-            if not live:
-                # One more beat for the thread to leave its last syscall.
-                time.sleep(0.05)
-                return
-            time.sleep(0.02)
+        store.join(timeout=30)
 
     def _seed_parent(self, store: jobs.JobStore, root: Path, tmp: Path) -> dict:
         """A finished job whose run dir holds a workspace with a file in it."""
@@ -432,6 +404,108 @@ class ContinuationTests(unittest.TestCase):
         store = self._store(root / "runs")
         with self.assertRaises(KeyError):
             store.submit("x", "proj", continue_from="nope00000000")
+
+
+class PersistenceTests(unittest.TestCase):
+    """The task list survives a panel restart.
+
+    This is not only convenience: continuing a task needs the earlier task in the
+    list, so a restart used to take that ability away while leaving the
+    workspaces (and their files) on disk.
+    """
+
+    def _store(self, root: Path) -> jobs.JobStore:
+        return jobs.JobStore(root=root)
+
+    def _finished(self, store: jobs.JobStore, root: Path, tmp: Path) -> dict:
+        (root / "proj").mkdir(exist_ok=True)
+
+        def success(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            (run_dir / "workspace").mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text(
+                json.dumps(
+                    {"exit_code": 0, "delivered": ["notes.txt"], "answer": "all done"}
+                ),
+                encoding="utf-8",
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=success
+        ):
+            job = store.submit("write notes", "proj")
+            store.join(timeout=30)
+        return store.get(job["id"])
+
+    def test_a_restarted_store_reloads_finished_tasks(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        first = self._store(root / "runs")
+        before = self._finished(first, root, Path(tmp.name))
+
+        # A brand-new store over the same root: what a panel restart does.
+        after = self._store(root / "runs")
+        reloaded = after.get(before["id"])
+        self.assertIsNotNone(reloaded, "the finished task must survive a restart")
+        self.assertEqual(reloaded["state"], "done")
+        self.assertEqual(reloaded["delivered"], ["notes.txt"])
+        self.assertEqual(reloaded["answer"], "all done")
+        self.assertEqual(reloaded["task"], before["task"])
+
+    def test_a_task_can_be_continued_after_a_restart(self):
+        """The reason persistence matters: the earlier task is still addressable."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        before = self._finished(self._store(root / "runs"), root, Path(tmp.name))
+
+        after = self._store(root / "runs")
+
+        def capture(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text(
+                json.dumps({"exit_code": 0, "delivered": [], "answer": "ok"}),
+                encoding="utf-8",
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=capture
+        ):
+            child = after.submit("follow up", "", continue_from=before["id"])
+            after.join(timeout=30)
+        self.assertEqual(after.get(child["id"])["continues"], before["id"])
+
+    def test_a_task_left_running_is_not_reported_as_running(self):
+        """A process that is gone cannot still be running its task."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        store = self._store(root / "runs")
+        (root / "runs").mkdir(parents=True, exist_ok=True)
+        (root / "runs" / "index.json").write_text(
+            json.dumps([{
+                "id": "abcd1234abcd", "task": "was mid-flight", "project": "proj",
+                "project_path": str(root / "proj"), "harness": "claude-code",
+                "model": "", "routed_by": "", "workspace": str(root / "ws"),
+                "cloned": False, "run_dir": str(root / "runs" / "abcd1234abcd"),
+                "state": "running", "exit_code": None, "delivered": [],
+            }]),
+            encoding="utf-8",
+        )
+        reloaded = self._store(root / "runs").get("abcd1234abcd")
+        self.assertEqual(reloaded["state"], "interrupted")
+
+    def test_a_torn_index_starts_empty_rather_than_failing(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "runs").mkdir(parents=True, exist_ok=True)
+        (root / "runs" / "index.json").write_text("{not json", encoding="utf-8")
+        self.assertEqual(self._store(root / "runs").list(), [])
 
 
 if __name__ == "__main__":

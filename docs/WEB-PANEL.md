@@ -69,9 +69,10 @@ continued task with the task it continues.
 
 A continuation is a chain, not a thread the panel remembers: each task has its
 own entry, and the harness's memory of the conversation lives in the workspace,
-not in the panel. Restarting `harness2-web` therefore loses the list of tasks
-(and with it the ability to continue one), though the workspaces and their files
-remain on disk under `runs/web/`.
+not in the panel. The list itself is persisted to `runs/web/index.json`, so a
+restart keeps the tasks (and with them the ability to continue one); a task that
+was mid-flight when the panel went away is shown as `interrupted`, since a
+process that is gone cannot still be running it.
 
 ## Where a task actually runs
 

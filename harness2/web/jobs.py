@@ -101,13 +101,98 @@ class Job:
         }
 
 class JobStore:
-    """The running set, behind a lock, plus the thread that fills it."""
+    """The running set, behind a lock, plus the thread that fills it.
+
+    The list is persisted to `index.json` under the runs root, so restarting the
+    panel no longer loses it. That matters for more than convenience: continuing a
+    task needs the earlier task to still be in the list, and a restart used to
+    take that ability away while leaving the workspaces on disk.
+    """
+
+    INDEX_NAME = "index.json"
 
     def __init__(self, *, root: Path | None = None):
         self.root = Path(root or config.RUNS / "web")
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = threading.Lock()
+        self._threads: dict[str, threading.Thread] = {}
+        self._load()
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for every job thread to finish.
+
+        A caller that is about to remove the runs root -- a test's temp dir, say
+        -- needs this: a thread still writing makes the removal fail, and the
+        error says nothing about what was being tested.
+        """
+        for thread in list(self._threads.values()):
+            if thread.is_alive():
+                thread.join(timeout=timeout)
+
+    # -- persistence ------------------------------------------------------
+
+    @property
+    def _index_path(self) -> Path:
+        return self.root / self.INDEX_NAME
+
+    def _load(self) -> None:
+        """Read the index written by an earlier run. A missing or torn file is
+        not an error: the panel simply starts with an empty list, as before."""
+        try:
+            raw = json.loads(self._index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(raw, list):
+            return
+        for entry in raw:
+            if not isinstance(entry, dict) or not entry.get("id"):
+                continue
+            try:
+                job = Job(
+                    id=str(entry["id"]),
+                    task=str(entry.get("task") or ""),
+                    project=str(entry.get("project") or ""),
+                    project_path=Path(str(entry.get("project_path") or ".")),
+                    harness=str(entry.get("harness") or ""),
+                    model=str(entry.get("model") or ""),
+                    routed_by=str(entry.get("routed_by") or ""),
+                    workspace=Path(str(entry.get("workspace") or ".")),
+                    cloned=bool(entry.get("cloned")),
+                    run_dir=Path(entry["run_dir"]) if entry.get("run_dir") else None,
+                    continues=str(entry.get("continues") or ""),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            # The rest of the record is restored from the saved view, so a
+            # finished task keeps its answer and files across a restart.
+            job.state = str(entry.get("state") or "done")
+            job.exit_code = entry.get("exit_code")
+            job.delivered = list(entry.get("delivered") or [])
+            job.answer = str(entry.get("answer") or "")
+            job.error = str(entry.get("error") or "")
+            job.cancelled = bool(entry.get("cancelled"))
+            job.started = str(entry.get("started") or "")
+            job.finished = str(entry.get("finished") or "")
+            # A task cannot have been left running by a process that is gone.
+            if job.state in ("running", "queued"):
+                job.state = "interrupted"
+            self._jobs[job.id] = job
+            self._order.append(job.id)
+
+    def _save(self) -> None:
+        """Write the index atomically; called with `_lock` held."""
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            tmp = self._index_path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps([self._jobs[j].view() for j in self._order], indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(self._index_path)
+        except OSError:
+            # The list is a convenience, never a reason to fail a task.
+            pass
 
     # -- reading ---------------------------------------------------------
 
@@ -200,10 +285,14 @@ class JobStore:
         with self._lock:
             self._jobs[job_id] = job
             self._order.append(job_id)
+            self._save()
 
-        threading.Thread(
+        thread = threading.Thread(
             target=self._run, args=(job_id, timeout), name=f"job-{job_id}", daemon=True
-        ).start()
+        )
+        with self._lock:
+            self._threads[job_id] = thread
+        thread.start()
         return job.view()
 
     def cancel(self, job_id: str) -> bool:
@@ -251,6 +340,7 @@ class JobStore:
                 return False
             del self._jobs[job_id]
             self._order.remove(job_id)
+            self._save()
         return True
 
     # -- helpers ---------------------------------------------------------
@@ -296,6 +386,7 @@ class JobStore:
             job = self._jobs[job_id]
             job.state = "running"
             job.started = _now()
+            self._save()
             harness = job.harness
             model = job.model
             workspace = job.workspace
@@ -323,6 +414,7 @@ class JobStore:
                 job.state = "failed"
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.finished = _now()
+                self._save()
             return
 
         metrics = {}
@@ -366,6 +458,7 @@ class JobStore:
                         f"exit {exit_code}" if exit_code is not None else "produced no metrics"
                     )
             job.finished = _now()
+            self._save()
 
 def projects() -> list[dict]:
     """Every project directory the panel can offer, newest activity first."""

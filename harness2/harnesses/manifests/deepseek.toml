@@ -30,7 +30,10 @@ trace_glob = "~/.dsh/sessions/**/*"
 can_run = true
 
 # Group assignment: the Qwen/GLM/open-weight group.
-allowed_models = ["qwen*", "glm*", "deepseek*", "local"]
+# The globs are `*x*`, not `x*`: a gateway id is namespaced (`bai/glm-5.3`,
+# `Yeta/deepseek-v4.1-flash`), so a leading-anchored pattern matches nothing and
+# leaves the harness with no model at all.
+allowed_models = ["*qwen*", "*glm*", "*deepseek*", "local"]
 
 # Routing: the cheap/long-context lane.
 routes = ["bulk", "batch", "extract", "translate", "triage", "scan", "chunk"]

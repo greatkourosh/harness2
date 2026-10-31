@@ -80,6 +80,9 @@ PAGE = """<!doctype html>
  .s-running { color:var(--run); border-color:var(--run) }
  .s-done { color:var(--ok); border-color:var(--ok) }
  .s-no_files { color:var(--dim); border-color:var(--line) }
+ /* A task the panel was restarted out from under: it did not fail, we simply
+    do not know how it ended. */
+ .s-interrupted { color:var(--run); border-color:var(--run) }
  .s-failed { color:var(--bad); border-color:var(--bad) }
  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px;
    padding:11px; overflow:auto; max-height:calc(100vh - 300px); font-size:12px;

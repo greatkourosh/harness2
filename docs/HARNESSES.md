@@ -50,6 +50,11 @@ empty, and asking it to continue is then refused rather than silently starting a
 fresh session. The task panel uses this to offer **Continue this task** — claude,
 pi and opencode declare one; dsh's headless profile does not.
 
+`allowed_models` globs are matched against the gateway's own ids, which are
+namespaced (`bai/glm-5.3`, `Yeta/deepseek-v4.1-flash`), so a family pattern must
+be `*glm*`, not `glm*` — the anchored form matches nothing and leaves the harness
+with an empty group, which reads as a provider failure rather than a glob one.
+
 An **adapter** (`harness2/harnesses/adapters.py`) knows that harness's config
 shape and nothing else. Writes are always merge-with-backup: a harness config is
 the user's own file, often carrying settings this package knows nothing about.
