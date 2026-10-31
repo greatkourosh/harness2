@@ -29,15 +29,22 @@ model_flag = ""
 trace_glob = "~/.dsh/sessions/**/*"
 can_run = true
 
-# Group assignment: the Qwen/GLM/open-weight group.
-# The globs are `*x*`, not `x*`: a gateway id is namespaced (`bai/glm-5.3`,
-# `Yeta/deepseek-v4.1-flash`), so a leading-anchored pattern matches nothing and
-# leaves the harness with no model at all.
-allowed_models = ["*qwen*", "*glm*", "*deepseek*", "local"]
+# Group assignment: the open-weight lane, plus the `ag/` route.
+#
+# `ag/*` is not decoration: it is the only family that actually answered on this
+# gateway. Probed directly, every qwen/glm/deepseek provider failed -- `bai/*` has
+# no credentials, `Yeta/glm-5.3-flash` is out of quota, `apinexbond/free/*` is
+# suspended -- so a group of only those leaves dsh with nothing runnable, which
+# reads as a broken harness rather than an unfunded provider. `ag/gemini-3.8-flash-high`
+# is slow (~1-2 min) but it works, and dsh ran on it end to end.
+#
+# The globs are `*x*`, not `x*`: a gateway id is namespaced (`bai/glm-5.3`), so a
+# leading-anchored pattern matches nothing at all.
+allowed_models = ["ag/*", "*qwen*", "*glm*", "*deepseek*", "local"]
 
 # Routing: the cheap/long-context lane.
 routes = ["bulk", "batch", "extract", "translate", "triage", "scan", "chunk"]
-default_model = "local"
+default_model = "ag/gemini-3.8-flash-high"
 priority = 1
 
 [env]
