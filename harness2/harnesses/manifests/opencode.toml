@@ -15,6 +15,8 @@ key_name = "opencode_desktop"
 binary = "opencode"
 headless = ["run", "{prompt}"]
 model_flag = "--model"
+# `opencode run --continue` continues the last session in this directory.
+continue_flag = "--continue"
 trace_glob = "~/.local/share/opencode/log/*.log"
 skills_dir = "~/.config/opencode/skill"
 

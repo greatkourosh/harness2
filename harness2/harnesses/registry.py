@@ -44,6 +44,10 @@ class HarnessSpec:
     binary: str = ""
     headless: tuple[str, ...] = ()
     model_flag: str = "--model"
+    # The flag that resumes this harness's previous conversation in the same
+    # working directory, or "" when it has none. A panel task that continues an
+    # earlier one is only possible where this is set.
+    continue_flag: str = ""
     trace_glob: str = ""
     skills_dir: Path | None = None
     can_run: bool = True
@@ -106,6 +110,7 @@ def _from_dict(raw: dict, *, source: Path) -> HarnessSpec:
         binary=str(raw.get("binary", "")),
         headless=_paths(raw, "headless"),
         model_flag=str(raw.get("model_flag", "--model")),
+        continue_flag=str(raw.get("continue_flag", "")),
         trace_glob=str(raw.get("trace_glob", "")),
         skills_dir=Path(str(skills)).expanduser() if skills else None,
         can_run=bool(raw.get("can_run", True)),

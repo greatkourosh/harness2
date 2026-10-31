@@ -42,6 +42,9 @@ headless = [
   "--verbose",
 ]
 model_flag = "--model"
+# Resumes the previous conversation in the same working directory, which is what
+# lets a panel task continue an earlier one instead of starting cold.
+continue_flag = "--continue"
 trace_glob = "~/.claude/projects/**/*.jsonl"
 skills_dir = "~/.claude/skills"
 

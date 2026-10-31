@@ -53,6 +53,26 @@ A task does not have to write a file. `hey` is answered in prose, and that reply
 the panel shows it under the task, so a conversational prompt reads as finished
 work rather than as an empty run.
 
+### Continuing a task
+
+Each task normally starts cold: a fresh workspace and no memory of any earlier
+task. **Continue this task** on a finished task changes that for one follow-up.
+The new task runs in *the same workspace the earlier one worked in* — its files
+are still there — and the harness resumes the conversation it left, so "now do
+step 2" works on the plan you just wrote.
+
+Continuing inherits the project and the harness: a different project has a
+different tree, and a different harness has no conversation to resume. It is
+offered only for harnesses whose manifest declares a `continue_flag` (claude,
+pi, and opencode do; dsh's headless profile does not). The detail view marks a
+continued task with the task it continues.
+
+A continuation is a chain, not a thread the panel remembers: each task has its
+own entry, and the harness's memory of the conversation lives in the workspace,
+not in the panel. Restarting `harness2-web` therefore loses the list of tasks
+(and with it the ability to continue one), though the workspaces and their files
+remain on disk under `runs/web/`.
+
 ## Where a task actually runs
 
 This is the part worth understanding before pointing it at real work.
@@ -82,7 +102,7 @@ The page is a thin client over a small JSON API, if you would rather script it:
 | `GET` | `/api/tasks` | every task's current state |
 | `GET` | `/api/tasks/<id>` | one task |
 | `GET` | `/api/tasks/<id>/log` | its captured output |
-| `POST` | `/api/tasks` | `{"task": "...", "project": "...", "harness": "", "model": ""}` |
+| `POST` | `/api/tasks` | `{"task": "...", "project": "...", "harness": "", "model": "", "continue_from": ""}` |
 | `POST` | `/api/tasks/<id>/cancel` | mark it failed so the UI stops waiting |
 | `POST` | `/api/tasks/<id>/forget` | drop a finished task from the list |
 
@@ -96,6 +116,15 @@ curl -s -X POST http://127.0.0.1:8090/api/tasks \
 text exactly as `harness2-harness do` does. The response is the new task's own
 view, including the `state` field described above and the `answer` once it
 settles.
+
+`continue_from` names an earlier task to continue; with it, `project` is optional
+and ignored (both it and the harness come from that task):
+
+```bash
+curl -s -X POST http://127.0.0.1:8090/api/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"now do step 2","continue_from":"04fa126a7b05"}'
+```
 
 ## Cancel
 

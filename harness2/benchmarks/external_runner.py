@@ -159,24 +159,40 @@ def run_one(
     prompt: str,
     model: str,
     timeout: int = 3600,
+    workspace: Path | None = None,
+    continue_last: bool = False,
 ) -> Path:
-    """Run `prompt` through `harness` in a fresh workspace; return the run dir."""
+    """Run `prompt` through `harness` in a workspace; return the run dir.
+
+    `workspace` overrides the default `<run_dir>/workspace`. A caller uses it to
+    continue an earlier run in the directory that run worked in, so the files it
+    wrote are still there.
+
+    `continue_last` resumes the harness's previous conversation in that same
+    directory. It is only meaningful together with a reused workspace: the
+    harness finds its session by working directory, so a fresh directory would
+    resume nothing. The first turn of a thread passes neither.
+    """
     spec = HREG.load_one(harness)
     if not spec.can_run:
         raise ValueError(f"{harness} has no non-interactive mode")
     substrate = ExternalCliSubstrate(harness)
 
     run_dir = Path(results_root) / run_id
-    workspace = run_dir / "workspace"
+    workspace = Path(workspace) if workspace is not None else run_dir / "workspace"
     output_dir = workspace / "output"
     run_dir.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
 
-    if task_dir.is_dir():
+    # A continuing run passes its own workspace as `task_dir`, so the two are the
+    # same directory and there is nothing to copy -- and copying a directory into
+    # itself fails. Only a fresh run has a distinct source to seed from.
+    if task_dir.is_dir() and Path(task_dir).resolve() != workspace.resolve():
         shutil.copytree(task_dir, workspace, dirs_exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     full_prompt = build_prompt(prompt, workspace)
-    argv = substrate.argv(full_prompt, workspace, model)
+    argv = substrate.argv(full_prompt, workspace, model, continue_last=continue_last)
     env = substrate.exec_env(os.environ)
 
     session = run_dir / f"{harness}_session.jsonl"
@@ -188,6 +204,7 @@ def run_one(
         "run_id": run_id,
         "argv": argv,
         "workspace": str(workspace),
+        "continued": bool(continue_last),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
     (run_dir / "config.json").write_text(json.dumps(config_json, indent=2), encoding="utf-8")

@@ -326,5 +326,113 @@ class JobStoreTests(unittest.TestCase):
         self.assertEqual(final["state"], "failed", "a cancelled job must stay failed")
         self.assertTrue(final["cancelled"])
 
+
+class ContinuationTests(unittest.TestCase):
+    """Continuing a task runs it where the earlier one worked, and resumes its
+    conversation.
+
+    Two things have to line up and neither is visible from one place: the new
+    task must work in the directory the earlier run's files are in (not the clone
+    it was seeded from), and run_one must not try to copy that directory into
+    itself. Both were wrong on the first attempt and only running it showed that.
+    """
+
+    def _store(self, root: Path) -> jobs.JobStore:
+        return jobs.JobStore(root=root)
+
+    def _quiet(self, store: jobs.JobStore) -> None:
+        """Wait until no job is still running.
+
+        Each submit starts a thread. Letting a temp dir be cleaned up while one
+        is still writing makes the test flaky with `OSError: Directory not
+        empty`, which says nothing about the behaviour under test.
+        """
+        import time
+
+        for _ in range(400):
+            live = [
+                j
+                for j in store.list()
+                if j["state"] in ("running", "queued")
+            ]
+            if not live:
+                # One more beat for the thread to leave its last syscall.
+                time.sleep(0.05)
+                return
+            time.sleep(0.02)
+
+    def _seed_parent(self, store: jobs.JobStore, root: Path, tmp: Path) -> dict:
+        """A finished job whose run dir holds a workspace with a file in it."""
+        (root / "proj").mkdir(exist_ok=True)
+
+        def success(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            (run_dir / "workspace" / "output").mkdir(parents=True, exist_ok=True)
+            (run_dir / "workspace" / "output" / "plan.txt").write_text("step 2 here")
+            (run_dir / "metrics.json").write_text(
+                json.dumps({"exit_code": 0, "delivered": ["plan.txt"], "answer": "ok"}),
+                encoding="utf-8",
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=success
+        ):
+            job = store.submit("write a plan", "proj")
+            self._quiet(store)
+        return store.get(job["id"])
+
+    def test_continue_works_in_the_parents_run_workspace(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        store = self._store(root / "runs")
+        parent = self._seed_parent(store, root, Path(tmp.name))
+
+        seen: dict = {}
+
+        def capture(**kw):
+            seen.update(kw)
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text(
+                json.dumps({"exit_code": 0, "delivered": [], "answer": "did it"}),
+                encoding="utf-8",
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=capture
+        ):
+            child = store.submit("now do step 2", "", continue_from=parent["id"])
+            self._quiet(store)
+
+        # The directory the parent actually worked in, where its file lives.
+        self.assertEqual(Path(seen["workspace"]), Path(parent["run_dir"]) / "workspace")
+        self.assertTrue(seen["continue_last"], "the harness must be told to continue")
+        self.assertEqual(seen["task_dir"], Path(parent["run_dir"]) / "workspace")
+        self.assertEqual(store.get(child["id"])["continues"], parent["id"])
+
+    def test_continue_inherits_project_and_harness(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        store = self._store(root / "runs")
+        parent = self._seed_parent(store, root, Path(tmp.name))
+        child = store.submit("follow up", "", continue_from=parent["id"])
+        self._quiet(store)
+        self.assertEqual(child["project"], parent["project"])
+        self.assertEqual(child["harness"], parent["harness"])
+
+    def test_continuing_an_unknown_task_is_refused(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "proj").mkdir()
+        store = self._store(root / "runs")
+        with self.assertRaises(KeyError):
+            store.submit("x", "proj", continue_from="nope00000000")
+
+
 if __name__ == "__main__":
     unittest.main()

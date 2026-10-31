@@ -68,6 +68,8 @@ class Job:
     # The harness's closing message. A task that asks a question has no file to
     # point at, so its answer is what the panel must show.
     answer: str = ""
+    # The job this one continues, if any; its workspace is shared with that job.
+    continues: str = ""
     cancelled: bool = False
     error: str = ""
     started: str = ""
@@ -88,6 +90,7 @@ class Job:
             "exit_code": self.exit_code,
             "delivered": list(self.delivered),
             "answer": self.answer,
+            "continues": self.continues,
             "cancelled": self.cancelled,
             "error": self.error,
             "started": self.started,
@@ -134,18 +137,52 @@ class JobStore:
     # -- writing ---------------------------------------------------------
 
     def submit(
-        self, task: str, project: str, *, harness: str = "", model: str = "", timeout: int = 3600
+        self,
+        task: str,
+        project: str,
+        *,
+        harness: str = "",
+        model: str = "",
+        timeout: int = 3600,
+        continue_from: str = "",
     ) -> dict:
-        """Queue a task and start its thread; returns the job's first view."""
-        project_path = self._project_path(project)
+        """Queue a task and start its thread; returns the job's first view.
+
+        `continue_from` names an earlier job to continue: the new task runs in
+        that job's workspace, with the files it produced still there, and the
+        harness resumes its previous conversation there. A thread is the chain of
+        jobs that carry the same workspace forward.
+        """
+        parent: Job | None = None
+        if continue_from:
+            with self._lock:
+                parent = self._jobs.get(continue_from)
+            if parent is None:
+                raise KeyError(f"no task {continue_from!r} to continue")
+
+        # Continuing keeps the project and harness of the task being continued:
+        # a different project would have a different tree, and a different
+        # harness has no conversation to resume.
+        project_path = parent.project_path if parent else self._project_path(project)
         specs = registry.load_all()
+        if parent:
+            harness = parent.harness
         if harness:
             decision = registry.route(task, specs, preferred=harness)
         else:
             decision = registry.route(task, specs)
 
         job_id = uuid.uuid4().hex[:12]
-        workspace, cloned = self._prepare(project_path, job_id)
+        if parent:
+            # Continue in the directory the earlier run ACTUALLY worked in, not
+            # the clone it started from. A fresh run is seeded from the clone into
+            # its own `<root>/<id>/workspace`, and every file it wrote is in there;
+            # resuming the conversation somewhere else finds neither the files nor
+            # the harness's own session, which it looks up by working directory.
+            workspace, cloned = parent.run_dir / "workspace", parent.cloned
+            project = parent.project  # the child shows the project it runs in
+        else:
+            workspace, cloned = self._prepare(project_path, job_id)
         run_dir = self.root / job_id
         job = Job(
             id=job_id,
@@ -158,6 +195,7 @@ class JobStore:
             workspace=workspace,
             cloned=cloned,
             run_dir=run_dir,
+            continues=parent.id if parent else "",
         )
         with self._lock:
             self._jobs[job_id] = job
@@ -262,16 +300,23 @@ class JobStore:
             model = job.model
             workspace = job.workspace
             run_dir = job.run_dir
+            continues = job.continues
 
         try:
             ER.run_one(
                 harness=harness,
                 run_id=job_id,
                 results_root=self.root,
+                # A continuing task works IN the directory the earlier one left,
+                # so its files are still there; a fresh task's own directory is
+                # the source that run_one copies from. Either way the agent ends
+                # up in `<root>/<id>/workspace`.
                 task_dir=workspace,
                 prompt=job.task,
                 model=model,
                 timeout=timeout,
+                workspace=workspace if continues else None,
+                continue_last=bool(continues),
             )
         except (ValueError, KeyError, OSError, RuntimeError) as exc:
             with self._lock:

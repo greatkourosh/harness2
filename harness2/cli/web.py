@@ -71,6 +71,10 @@ PAGE = """<!doctype html>
  .task { color:var(--dim); font-size:12px; overflow:hidden; text-overflow:ellipsis;
    white-space:nowrap }
  .meta { color:var(--dim); font-size:11px; margin-top:3px }
+ /* The continuing banner sits inside the form, so it needs its own padding and
+    an accent border rather than the list row's spacing. */
+ #cont { color:var(--accent); font-size:11px; margin:0 0 8px;
+         border-left:2px solid var(--accent); padding:4px 8px }
  .pill { font-size:10px; padding:1px 7px; border-radius:99px; border:1px solid var(--line);
    color:var(--dim); flex:0 0 auto }
  .s-running { color:var(--run); border-color:var(--run) }
@@ -89,6 +93,7 @@ PAGE = """<!doctype html>
 <main>
  <div id="side">
   <form id="new">
+   <div id="cont" style="display:none" class="meta"></div>
    <textarea id="task" placeholder="task… (routing picks the harness)"></textarea>
    <select id="project"></select>
    <select id="harness"><option value="">auto (route by task)</option></select>
@@ -121,10 +126,12 @@ document.getElementById('new').onsubmit = async e => {
     task,
     project: document.getElementById('project').value,
     harness: document.getElementById('harness').value,
+    continue_from: continuing || '',
   });
   const job = await sjson('/api/tasks', {
     method:'POST', headers:{'Content-Type':'application/json'}, body });
   document.getElementById('task').value = '';
+  stopContinue();          // the follow-up is queued; drop the continuing banner
   selected = job.id;
   poll();
 };
@@ -157,6 +164,24 @@ window.act = async (id, what) => {
   poll();
 };
 
+// Continue this task: the new one runs in the same workspace, with this task's
+// files still in reach, and the harness resumes the conversation it left.
+window.continuing = null;
+window.startContinue = id => {
+  continuing = id;
+  const bar = document.getElementById('cont');
+  bar.style.display = 'block';
+  bar.textContent = 'Continuing task ' + id + ' — type the follow-up and press Run';
+  bar.dataset.parent = id;
+  document.getElementById('task').focus();
+};
+window.stopContinue = () => {
+  continuing = null;
+  const bar = document.getElementById('cont');
+  bar.style.display = 'none';
+  bar.textContent = '';
+};
+
 async function detail(id) {
   const [j, log] = await Promise.all([sjson('/api/tasks/'+id), sjson('/api/tasks/'+id+'/log')]);
   if (!j || j.error === 'not found') return;
@@ -177,6 +202,9 @@ async function detail(id) {
    ${(j.state==='running'||j.state==='queued')?
      `<button class="ghost" onclick="act('${j.id}','cancel')">Cancel (stops the harness)</button>`:
      `<button class="ghost" onclick="act('${j.id}','forget')">Remove from list</button>`}
+   ${(j.state==='done'||j.state==='no_files')?
+     `<button class="ghost" onclick="startContinue('${j.id}')">Continue this task</button>`:''}
+   ${j.continues?`<div class="meta" style="color:var(--dim)">continues task ${esc(j.continues)} (same workspace)</div>`:''}
    ${j.answer?`<h3 style="font-size:13px">answer</h3><pre style="white-space:pre-wrap">${esc(j.answer)}</pre>`:''}
    ${files?`<h3 style="font-size:13px">delivered</h3><ul>${files}</ul>`:''}
    <h3 style="font-size:13px">output log</h3>
@@ -242,8 +270,13 @@ def _make_handler(store: jobs.JobStore):
                 body = self._read_json()
                 task = str(body.get("task") or "").strip()
                 project = str(body.get("project") or "").strip()
-                if not task or not project:
-                    return self._json({"error": "task and project are required"}, 400)
+                # `continue_from` inherits the project and harness of the task it
+                # continues, so only `task` is required in that form.
+                continues = str(body.get("continue_from") or "").strip()
+                if not task or not (project or continues):
+                    return self._json(
+                        {"error": "task, and either project or continue_from, are required"}, 400
+                    )
                 try:
                     job = store.submit(
                         task,
@@ -251,6 +284,7 @@ def _make_handler(store: jobs.JobStore):
                         harness=str(body.get("harness") or ""),
                         model=str(body.get("model") or ""),
                         timeout=int(body.get("timeout") or 3600),
+                        continue_from=continues,
                     )
                 except (ValueError, KeyError, RuntimeError) as exc:
                     return self._json({"error": str(exc)}, 400)

@@ -366,6 +366,33 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(_resolve_model(spec, "some/explicit-id"), "some/explicit-id")
 
 
+class ContinuationFlags(unittest.TestCase):
+    """Continuation is a manifest fact, not a guess.
+
+    claude, pi and opencode each take `--continue`; dsh's headless profile has no
+    such flag, so a caller that assumed one would silently start a fresh session
+    and report it as a continuation.
+    """
+
+    def test_a_harness_declares_how_to_continue(self):
+        self.assertEqual(registry.load_one("claude-code").continue_flag, "--continue")
+        self.assertEqual(registry.load_one("pi").continue_flag, "--continue")
+        self.assertEqual(registry.load_one("opencode").continue_flag, "--continue")
+        self.assertEqual(registry.load_one("deepseek").continue_flag, "")
+
+    def test_the_flag_is_added_only_when_asked(self):
+        sub = ExternalCliSubstrate("claude-code")
+        fresh = sub.argv("P", Path("/ws"), "m")
+        cont = sub.argv("P", Path("/ws"), "m", continue_last=True)
+        self.assertNotIn("--continue", fresh, "a fresh run must not resume anything")
+        self.assertEqual(cont[-1], "--continue")
+
+    def test_it_is_refused_where_the_manifest_has_no_flag(self):
+        with self.assertRaises(ValueError) as ctx:
+            ExternalCliSubstrate("deepseek").argv("P", Path("/ws"), "m", continue_last=True)
+        self.assertIn("continue", str(ctx.exception).lower())
+
+
 class BenchMetricsTests(unittest.TestCase):
     """`harness2-harness bench` reads its own stream, so a claude capture needs the
     same reading rule the LAB runner uses: totals come from the terminal `result`

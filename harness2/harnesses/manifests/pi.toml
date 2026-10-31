@@ -14,6 +14,8 @@ key_name = "pi_harness"
 binary = "pi"
 headless = ["--print", "{prompt}"]
 model_flag = "--model"
+# `pi --continue` resumes the previous session in the same working directory.
+continue_flag = "--continue"
 trace_glob = "~/.pi/agent/sessions/**/*.jsonl"
 skills_dir = "~/.pi/agent/skills"
 

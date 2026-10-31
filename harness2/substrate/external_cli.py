@@ -98,14 +98,24 @@ class ExternalCliSubstrate:
             },
         )
 
-    def argv(self, prompt: str, workspace: Path, model: str) -> list[str]:
+    def argv(self, prompt: str, workspace: Path, model: str, *, continue_last: bool = False) -> list[str]:
         """The reference headless argv from the manifest's template.
 
         `{prompt}` is substituted, and `{model}` too when the manifest's headless
         list carries it; otherwise the model is appended after `model_flag`.
+
+        `continue_last` adds the manifest's `continue_flag`, resuming this
+        harness's previous conversation in the same working directory. It is
+        refused when the manifest declares no such flag, rather than silently
+        starting a fresh session that looks like a continuation.
         """
         if not self.spec.can_run:
             raise ValueError(f"{self.spec.label} has no non-interactive mode")
+        if continue_last and not self.spec.continue_flag:
+            raise ValueError(
+                f"{self.spec.label} cannot continue a previous conversation: its "
+                f"manifest declares no continue_flag"
+            )
         argv = [self.spec.binary or self.harness_id]
         placed_model = False
         for part in self.spec.headless:
@@ -118,6 +128,8 @@ class ExternalCliSubstrate:
                 argv.append(part)
         if model and not placed_model and self.spec.model_flag:
             argv += [self.spec.model_flag, model]
+        if continue_last:
+            argv.append(self.spec.continue_flag)
         return argv
 
     def exec_env(self, base_env: Mapping[str, str]) -> dict[str, str]:

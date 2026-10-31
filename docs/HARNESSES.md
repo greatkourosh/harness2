@@ -37,11 +37,18 @@ key_name = "pi_harness"
 binary = "pi"
 headless = ["--print", "{prompt}"]
 model_flag = "--model"
+continue_flag = "--continue"
 trace_glob = "~/.pi/agent/sessions/**/*.jsonl"
 
 # A model group. Globs match gateway ids; an empty list means unrestricted.
 allowed_models = ["All", "Safe", "Coding", "General", "Fast", "Reasoning", "Vision", "local"]
 ```
+
+`continue_flag` is how that harness resumes its previous conversation in the same
+working directory (`claude -p --continue`). A harness with no such flag leaves it
+empty, and asking it to continue is then refused rather than silently starting a
+fresh session. The task panel uses this to offer **Continue this task** — claude,
+pi and opencode declare one; dsh's headless profile does not.
 
 An **adapter** (`harness2/harnesses/adapters.py`) knows that harness's config
 shape and nothing else. Writes are always merge-with-backup: a harness config is
