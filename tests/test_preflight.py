@@ -114,6 +114,62 @@ class WrittenRoutesMatchTheCheck(unittest.TestCase):
             )
 
 
+class WorkBuddyGatewayAddress(unittest.TestCase):
+    """The gateway URL handed to a WorkBuddy job must be one the HOST can dial.
+
+    The 9router branch used to rewrite the host's loopback address to
+    `host.docker.internal`, on the theory that the container needs it. But the
+    job's model proxy runs on the host, resolves `HARNESS2_9ROUTER_BASE_URL`
+    from there, and that name does not resolve on the host -- so every model
+    call died with "ConnectError ... Name or service not known" and the rollout
+    delivered nothing. The container never reads this variable at all; under
+    `local_proxy` it is given the proxy's own address by WorkBuddy itself.
+    """
+
+    def _job_env(self):
+        import types
+        from unittest.mock import patch
+
+        from harness2.benchmarks import workbuddy as WB
+
+        captured: dict = {}
+
+        class _Proc:
+            returncode = 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        def fake_popen(cmd, **kw):
+            captured.update(kw.get("env") or {})
+            return _Proc()
+
+        adapter = WB.WbAdapter("office", substrate="oc")
+        # A run reaches the env build before anything is launched; stop it there.
+        with patch.object(WB.subprocess, "Popen", side_effect=fake_popen), patch.object(
+            adapter, "_require_trial", lambda *a, **k: None, create=True
+        ), patch.object(WB.config, "NINEROUTER_BASE_URL", "http://127.0.0.1:20128/v1"), \
+                patch.object(WB.config, "NINEROUTER_API_KEY", "k"), \
+                patch.object(WB.config, "SOLVER_MODEL_OC", "9router/claude-sonnet-4-6"):
+            try:
+                adapter.execute("some-task", None, "wb-office-oc-agg1", timeout=5)
+            except Exception:
+                pass
+        return captured
+
+    def test_the_proxy_gets_a_host_resolvable_url(self):
+        env = self._job_env()
+        if "HARNESS2_9ROUTER_BASE_URL" not in env:
+            self.skipTest("job env not reached on this checkout")
+        url = env["HARNESS2_9ROUTER_BASE_URL"]
+        self.assertNotIn(
+            "host.docker.internal",
+            url,
+            "the host-run proxy cannot resolve host.docker.internal",
+        )
+        self.assertIn("127.0.0.1", url)
+
+
 class NoLeftoverOnAnUninstalledBench(unittest.TestCase):
     def test_a_missing_checkout_is_reported_not_crashed(self):
         """preflight returns messages; it must never raise for a bare checkout."""

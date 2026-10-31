@@ -117,14 +117,39 @@ All three roles may instead route through 9router (`HARNESS2_SOLVER_MODEL` and
 involved, and the routes carry the gateway's own model ids rather than the
 Vertex `google/<model>` spelling.
 
-Two preflight checks used to make that path impossible to start, and both are
-fixed: the solver/judge "configuration is stale" check compared the written name
-against the Vertex form only, so a correct 9router setup was reported stale; and
-the ADC (`gcloud auth application-default`) probe was gated on `bench == "wb"`,
-so it demanded Google credentials from a cell that never contacts Vertex. The
-gate now keys on the route: ADC is probed only when some role is actually a
-`google-vertex/...` id. `dependencies/workbuddy-bench/configs/models/harness2/{solver,judge}.yaml`
+Three faults used to make that path impossible to start, and all three are
+fixed. Two were preflight checks: the solver/judge "configuration is stale"
+check compared the written name against the Vertex form only, so a correct
+9router setup was reported stale; and the ADC (`gcloud auth application-default`)
+probe was gated on `bench == "wb"`, so it demanded Google credentials from a cell
+that never contacts Vertex. The gate now keys on the route: ADC is probed only
+when some role is actually a `google-vertex/...` id.
+`dependencies/workbuddy-bench/configs/models/harness2/{solver,judge}.yaml`
 records whichever route was written, and `harness2-check` accepts it.
+
+The third was the gateway address, and it only showed up by running a task.
+The job's model proxy runs **on the host** and resolves
+`HARNESS2_9ROUTER_BASE_URL` from there, while the OpenCode agent runs inside the
+container and reaches the gateway indirectly through that proxy. The 9router
+branch rewrote the URL to `host.docker.internal` — which the host itself cannot
+resolve — so every model call inside the container failed with
+`ConnectError ... Name or service not known`, the trial was still recorded as
+completed, and the rollout scored 0 because the agent never produced anything.
+The variable now carries the host's own address; the container-side address was
+never read from it.
+
+Two environment facts this depends on, both worth checking on a new machine:
+
+- The Docker daemon must have address pools left. Docker's default hands out
+  /16s from `172.17.0.0/12`, and a host running many compose projects exhausts
+  them: the failure is `all predefined address pools have been fully subnetted`
+  and no trial can start. Adding a pool in `/etc/docker/daemon.json`
+  (`{"base": "10.99.0.0/16", "size": 24}`) fixes it; requires a daemon restart.
+- The container must be able to name the host. WorkBuddy guarantees this itself:
+  `prepare_tasks.py` injects `extra_hosts: [host.docker.internal:host-gateway]`
+  into the owning service of every task's compose, so all 50 office tasks ship
+  with it. If the sidecar's address ever fails to resolve, that injection is the
+  place to look — not the harness2 env wiring.
 
 Setup patches the upstream fetch script to download with `curl` (then `wget`,
 then `hf`) and to require the dataset repository's `SHA256SUMS`: an archive that

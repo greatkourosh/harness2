@@ -20,7 +20,23 @@ Pandoc and Poppler are needed by LAB. Also install:
 - [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
 - [Docker Engine](https://docs.docker.com/engine/install/) for WorkBuddy-Bench,
-  with permission to run `docker info`.
+  with permission to run `docker info`. Each WorkBuddy trial creates its own
+  Docker network, and Docker's default address allocation is only 15 /16s
+  (`172.17.0.0/16`–`172.31.0.0/16`); a host already running many compose
+  projects exhausts that and no trial can start (`all predefined address pools
+  have been fully subnetted`). If `harness2-check --bench wb` passes but a run
+  fails this way, add a pool to `/etc/docker/daemon.json` and restart the
+  daemon:
+
+  ```json
+  "default-address-pools": [
+    {"base": "172.17.0.0/12", "size": 16},
+    {"base": "10.99.0.0/16",  "size": 24}
+  ]
+  ```
+
+  Keep the first entry: it is the range Docker already uses, so existing
+  networks stay valid.
 
 Benchmark setup installs its own pinned Bun runtime under `dependencies/`.
 Keep the main Harness² environment active when running the commands below.

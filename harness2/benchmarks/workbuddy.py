@@ -623,16 +623,23 @@ def run_batch(
             "HARNESS2_WB_VERTEX_URL": config.VERTEX_OPENAI_URL + "/chat/completions",
         }
         if config.SOLVER_MODEL_OC.startswith("9router/"):
-            # WorkBuddy runs in Docker, so the gateway is reached through the
-            # host gateway rather than the host's loopback address.
-            container_url = config.NINEROUTER_BASE_URL.replace(
-                "127.0.0.1", "host.docker.internal"
-            ).replace("localhost", "host.docker.internal")
-            env["HARNESS2_9ROUTER_BASE_URL"] = container_url
+            # Two different processes read the gateway, from two different network
+            # positions, so they need two different addresses:
+            #
+            #  * the job's model proxy runs ON THE HOST and dials the gateway from
+            #    there, so it needs the host's own loopback address;
+            #  * the OpenCode agent runs INSIDE the container and dials the gateway
+            #    only indirectly, through that proxy (`_proxy_url`, which WB builds
+            #    as host.docker.internal:3456), so it never reads this variable.
+            #
+            # Replacing "127.0.0.1" with "host.docker.internal" here broke the proxy:
+            # it resolved the name from the host, where it does not exist, and every
+            # model call died with "ConnectError ... Name or service not known". The
+            # container-side address is supplied by WB itself, not from here.
+            env["HARNESS2_9ROUTER_BASE_URL"] = config.NINEROUTER_BASE_URL
             env["HARNESS2_9ROUTER_API_KEY"] = config.NINEROUTER_API_KEY
-            # The OpenCode agent inside the container reads its provider block
-            # from these two variables.
-            env["OPENCODE_BASE_URL"] = container_url
+            # Kept for the direct (non-proxy) path, which reads these instead.
+            env["OPENCODE_BASE_URL"] = config.NINEROUTER_BASE_URL
             env["OPENCODE_API_KEY"] = config.NINEROUTER_API_KEY
         try:
             with _slots[substrate]:
