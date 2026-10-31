@@ -55,6 +55,15 @@ namespaced (`bai/glm-5.3`, `Yeta/deepseek-v4.1-flash`), so a family pattern must
 be `*glm*`, not `glm*` — the anchored form matches nothing and leaves the harness
 with an empty group, which reads as a provider failure rather than a glob one.
 
+A group must also name every model that harness should be able to run, because
+`apply` REWRITES the harness's own model list from it verbatim: a model missing
+from the group is removed by the next `apply`, even when it works. dsh shows both
+halves of this. Its intended lane (qwen/glm/deepseek) is unfunded on a 9router
+gateway, so the group also carries `claude-sonnet-4-6` and `ag/*`, which do
+answer, and `default_model` names the fast one. The adapter writes that
+`default_model` into dsh's `agent-default-model` plugin; it used to write
+`models[0]`, silently ignoring the manifest and picking whichever id sorted first.
+
 An **adapter** (`harness2/harnesses/adapters.py`) knows that harness's config
 shape and nothing else. Writes are always merge-with-backup: a harness config is
 the user's own file, often carrying settings this package knows nothing about.

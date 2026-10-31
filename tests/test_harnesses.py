@@ -37,11 +37,16 @@ class RegistryTests(unittest.TestCase):
             self.assertTrue(spec.key_name, spec.id)
 
     def test_matching_uses_globs_for_groups(self):
+        """The deepseek group is its open-weight lane plus the ids that answer on
+        a 9router gateway (`claude-sonnet-4-6`); a bare combo name it does not
+        list is still excluded."""
         catalog = ["glm-5.3", "qwen3.5-plus", "claude-sonnet-4-6", "All", "local"]
         spec = registry.load_one("deepseek")
         self.assertEqual(
-            sorted(registry.match_models(spec, catalog)), ["glm-5.3", "local", "qwen3.5-plus"]
+            sorted(registry.match_models(spec, catalog)),
+            ["claude-sonnet-4-6", "glm-5.3", "local", "qwen3.5-plus"],
         )
+        self.assertNotIn("All", registry.match_models(spec, catalog))
 
     def test_empty_allow_list_means_unrestricted(self):
         spec = registry.load_one("pi")
@@ -364,6 +369,46 @@ class RoutingTests(unittest.TestCase):
 
         spec = registry.load_one("pi")
         self.assertEqual(_resolve_model(spec, "some/explicit-id"), "some/explicit-id")
+
+
+class DeepseekDefaultModel(unittest.TestCase):
+    """`apply` must honour the manifest's `default_model`.
+
+    dsh takes no --model flag, so the profile's `agent-default-model` plugin is
+    the only thing that selects a model. The adapter used to write `models[0]`
+    there -- the first id of the group -- which ignored `default_model` entirely
+    and picked whichever id happened to sort first.
+    """
+
+    def test_apply_writes_the_declared_default(self):
+        import yaml
+
+        spec = registry.load_one("deepseek")
+        self.assertTrue(spec.default_model, "the manifest must declare a default")
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Path(td) / "cordis.patch.yml"
+            cfg.write_text("[]\n", encoding="utf-8")
+            types_mod = __import__("types")
+            adapter = adapters.DeepseekAdapter(spec)
+            adapter.spec = types_mod.SimpleNamespace(**{**spec.__dict__, "config_path": cfg})
+            # `allow` is the group the caller would pass, and the declared default
+            # is deliberately NOT first: that ordering is what the bug depended
+            # on, so putting it first would make this test pass either way.
+            adapter.apply(allow=["alicode-intl/qwen3.5-plus", spec.default_model])
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+        entry = next(e for e in data if e.get("id") == "agent-default-model")
+        self.assertEqual(entry["config"]["model"], spec.default_model)
+
+    def test_the_default_is_a_member_of_its_own_group(self):
+        """Naming a model the provider list omits makes dsh fail with
+        `has no configured model` -- a broken harness, not a fixable config."""
+        import fnmatch
+
+        spec = registry.load_one("deepseek")
+        self.assertTrue(
+            any(fnmatch.fnmatch(spec.default_model, p) for p in spec.allowed_models),
+            f"default_model {spec.default_model!r} is not matched by the group",
+        )
 
 
 class ModelGroupGlobs(unittest.TestCase):

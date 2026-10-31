@@ -29,22 +29,27 @@ model_flag = ""
 trace_glob = "~/.dsh/sessions/**/*"
 can_run = true
 
-# Group assignment: the open-weight lane, plus the `ag/` route.
+# Group assignment: the open-weight lane, plus the routes that answer here.
 #
-# `ag/*` is not decoration: it is the only family that actually answered on this
-# gateway. Probed directly, every qwen/glm/deepseek provider failed -- `bai/*` has
-# no credentials, `Yeta/glm-5.3-flash` is out of quota, `apinexbond/free/*` is
-# suspended -- so a group of only those leaves dsh with nothing runnable, which
-# reads as a broken harness rather than an unfunded provider. `ag/gemini-3.8-flash-high`
-# is slow (~1-2 min) but it works, and dsh ran on it end to end.
+# `apply` REWRITES this list into the profile verbatim, so a model dsh should be
+# able to run must be named in the group or the next `apply` removes it.
 #
-# The globs are `*x*`, not `x*`: a gateway id is namespaced (`bai/glm-5.3`), so a
-# leading-anchored pattern matches nothing at all.
-allowed_models = ["ag/*", "*qwen*", "*glm*", "*deepseek*", "local"]
+# The qwen/glm/deepseek entries are this harness's intended lane, but on this
+# gateway nothing behind them answers -- probed directly, `bai/*` reports no
+# credentials, `Yeta/glm-5.3-flash` is out of quota, `apinexbond/free/*` is
+# suspended. Two ids do work, and both are in the group so either survives an
+# `apply`:
+#
+#   claude-sonnet-4-6        ~12s, the practical default
+#   ag/gemini-3.8-flash-high ~90s, the same result at 8x the wait
+#
+# The family globs are `*x*`, not `x*`: a gateway id is namespaced
+# (`bai/glm-5.3`), so a leading-anchored pattern matches nothing at all.
+allowed_models = ["claude-sonnet-4-6", "ag/*", "*qwen*", "*glm*", "*deepseek*", "local"]
 
 # Routing: the cheap/long-context lane.
 routes = ["bulk", "batch", "extract", "translate", "triage", "scan", "chunk"]
-default_model = "ag/gemini-3.8-flash-high"
+default_model = "claude-sonnet-4-6"
 priority = 1
 
 [env]

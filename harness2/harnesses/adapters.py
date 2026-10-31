@@ -280,7 +280,14 @@ class DeepseekAdapter(Adapter):
         }
         # dsh takes no --model flag: the headless profile reads its model from the
         # `agent-default-model` plugin, so a provider entry alone leaves the run
-        # with no model selected. The first allowed model becomes the default.
+        # with no model selected.
+        #
+        # The manifest's `default_model` picks it, not the first entry of the
+        # group: the group is sorted by nothing in particular, so taking `models[0]`
+        # chose whichever id happened to come first and silently ignored the one
+        # the manifest named. It must also be IN the group, or the profile would
+        # name a model its own provider list does not offer -- dsh then fails with
+        # `has no configured model`, which reads as a broken harness.
         if models:
             default = next((e for e in data if e.get("id") == "agent-default-model"), None)
             if default is None:
@@ -290,8 +297,9 @@ class DeepseekAdapter(Adapter):
                     "config": {},
                 }
                 data.append(default)
+            preferred = self.spec.default_model if self.spec.default_model in models else ""
             default.setdefault("config", {})["provider"] = GATEWAY_ID
-            default["config"]["model"] = models[0]
+            default["config"]["model"] = preferred or models[0]
         backup = _backup(self.spec.config_path)
         self.spec.config_path.parent.mkdir(parents=True, exist_ok=True)
         self.spec.config_path.write_text(
