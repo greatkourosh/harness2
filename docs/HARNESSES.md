@@ -48,7 +48,14 @@ allowed_models = ["All", "Safe", "Coding", "General", "Fast", "Reasoning", "Visi
 working directory (`claude -p --continue`). A harness with no such flag leaves it
 empty, and asking it to continue is then refused rather than silently starting a
 fresh session. The task panel uses this to offer **Continue this task** — claude,
-pi and opencode declare one; dsh's headless profile does not.
+pi and opencode declare one.
+
+dsh resumes too, but not this way, so it declares no `continue_flag`: its headless
+profile takes `--session-id <id>`, which ADOPTS an existing session and errors on
+an id it does not know (`does not exist; omit --session-id to start a new
+Session`). There is no way to pick the id up front, so continuing means capturing
+the id it prints in its `session` event on the first turn and passing it back on
+the next. Nothing does that yet, so dsh is start-only in the panel.
 
 `allowed_models` globs are matched against the gateway's own ids, which are
 namespaced (`bai/glm-5.3`, `Yeta/deepseek-v4.1-flash`), so a family pattern must
@@ -74,7 +81,7 @@ the user's own file, often carrying settings this package knows nothing about.
 |---|---|---|---|
 | `pi` | `~/.pi/agent/models.json` | `pi --print` | routing combos |
 | `opencode` | `~/.config/opencode/opencode.json` | `opencode run` | Claude |
-| `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `qwen*`/`glm*`/`deepseek*` |
+| `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
 | `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
 
