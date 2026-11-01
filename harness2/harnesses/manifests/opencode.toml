@@ -13,7 +13,11 @@ adapter = "opencode"
 key_name = "opencode_desktop"
 
 binary = "opencode"
-headless = ["run", "{prompt}"]
+# `--format json` is not decorative: without it the run's closing text is written
+# as bare prose, and both readers here (`_final_text`, `render_events`) parse the
+# event stream instead -- so a conversational task that answered correctly was
+# reported as having produced no output. The JobBench runner passes the same flag.
+headless = ["run", "{prompt}", "--format", "json"]
 model_flag = "--model"
 # `opencode run --continue` continues the last session in this directory.
 continue_flag = "--continue"
@@ -32,5 +36,9 @@ allowed_models = [
 
 # Routing: opencode is the general-purpose interactive agent here.
 routes = ["plan", "design", "architect", "document", "docs", "explain", "review"]
-default_model = "claude-sonnet-4-6"
+# `--model` takes OpenCode's `provider/model` form, so the default carries the
+# gateway prefix. A bare id fails with `Model not found: claude-sonnet-4-6/.`;
+# harnesses that name a model directly (claude-code) take it bare instead, which
+# is why this lives in the manifest rather than in the shared resolver.
+default_model = "9router/claude-sonnet-4-6"
 priority = 5

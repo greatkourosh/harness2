@@ -153,6 +153,51 @@ class AdapterTests(unittest.TestCase):
             self.assertIn("9router", data["provider"])
             self.assertIn("keep", data["providers"])  # the pre-existing key survives
 
+    def test_opencode_run_gets_harness2s_config_home(self):
+        """The pinned OpenCode aborts on the user's desktop-schema global config
+        (`Unrecognized key: "providers"`), so the run must not read it.
+
+        The benchmark runners set XDG_CONFIG_HOME themselves; the manifest-driven
+        path reaches the same place through the adapter, and without it the panel
+        died before the first model call on a config it never should have read.
+        """
+        env = ExternalCliSubstrate("opencode").exec_env({})
+        self.assertTrue(env.get("XDG_CONFIG_HOME"))
+        self.assertNotEqual(Path(env["XDG_CONFIG_HOME"]).expanduser(), Path("~/.config").expanduser())
+
+    def test_opencode_model_is_provider_qualified(self):
+        """`opencode run --model` takes `provider/model`; a bare id fails with
+        `Model not found: claude-sonnet-4-6/.` on the provider-qualified config."""
+        from harness2.cli.harness import _resolve_model
+
+        spec = registry.load_one("opencode")
+        self.assertIn("/", _resolve_model(spec, ""))
+
+    def test_opencode_headless_asks_for_the_json_stream(self):
+        """Without `--format json` the closing text is bare prose and both readers
+        (`_final_text`, `render_events`) parse the event stream, so a task that
+        answered correctly was reported as having produced no output."""
+        self.assertIn("json", registry.load_one("opencode").headless)
+
+    def test_opencode_run_fences_its_workspace(self):
+        """Without OPENCODE_PERMISSION the session auto-rejects reads of its own
+        working tree and stops after the first tool call, so a real task looks
+        like a completed run that did nothing."""
+        workspace = Path("/tmp/ws-fence-probe")
+        env = ExternalCliSubstrate("opencode").exec_env({}, workspace=workspace)
+        import json as _json
+
+        allow = _json.loads(env["OPENCODE_PERMISSION"])["external_directory"]
+        self.assertEqual(allow["*"], "deny")
+        self.assertEqual(allow[str(workspace)], "allow")
+        self.assertEqual(allow[f"{workspace}/**"], "allow")
+
+    def test_exec_env_workspace_is_optional(self):
+        """Harnesses that fence nothing must still accept the call without it."""
+        for name in ("pi", "claude-code", "deepseek"):
+            env = ExternalCliSubstrate(name).exec_env({})
+            self.assertNotIn("OPENCODE_PERMISSION", env)
+
     def test_claude_desktop_refuses_to_write(self):
         adapter = adapters.get_adapter(registry.load_one("claude-desktop"))
         result = adapter.apply(allow=["gemini-2.5-flash"])

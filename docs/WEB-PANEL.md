@@ -62,10 +62,13 @@ are still there — and the harness resumes the conversation it left, so "now do
 step 2" works on the plan you just wrote.
 
 Continuing inherits the project and the harness: a different project has a
-different tree, and a different harness has no conversation to resume. It is
-offered only for harnesses whose manifest declares a `continue_flag` (claude,
-pi, and opencode do; dsh's headless profile does not). The detail view marks a
-continued task with the task it continues.
+different tree, and a different harness has no conversation to resume. Clicking
+**Continue this task** therefore moves the project and harness selectors onto
+that task's values — the inherited ones are what will actually run, and leaving
+the dropdowns on whatever was picked last made the follow-up look as if it would
+land somewhere else. It is offered only for harnesses whose manifest declares a
+`continue_flag` (claude, pi, and opencode do; dsh's headless profile does not).
+The detail view marks a continued task with the task it continues.
 
 A continuation is a chain, not a thread the panel remembers: each task has its
 own entry, and the harness's memory of the conversation lives in the workspace,

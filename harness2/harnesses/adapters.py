@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config
+from .. import config, ninerouter
 from .registry import HarnessSpec, match_models
 
 # Nine-router is reached under this id inside every harness's own config.
@@ -133,8 +133,12 @@ class Adapter:
         out = (proc.stdout or "").strip()
         return Result(proc.returncode == 0, f"exit {proc.returncode}", stdout=out)
 
-    def run_env_set(self) -> dict[str, str]:
-        """Env a harness needs to reach the gateway; empty when its config suffices."""
+    def run_env_set(self, *, workspace: Path | None = None) -> dict[str, str]:
+        """Env a harness needs to reach the gateway; empty when its config suffices.
+
+        `workspace` is the directory the run will work in, for the harnesses that
+        fence their own filesystem access around it.
+        """
         return {}
 
     def run_env_drop(self) -> tuple[str, ...]:
@@ -203,6 +207,24 @@ class OpencodeAdapter(Adapter):
     def configured_models(self) -> list[str]:
         prov = (self.current()["provider"] or {}).get(GATEWAY_ID) or {}
         return [str(k) for k in (prov.get("models") or {})]
+
+    def run_env_set(self, *, workspace: Path | None = None) -> dict[str, str]:
+        """Point the run at Harness2's own config home, and fence its file access.
+
+        v1.14.18 aborts on a global config written for a newer schema -- the
+        user's `~/.config/opencode/opencode.json` carries the desktop `providers`
+        key and is rejected outright -- so a run that reads it dies before the
+        first model call. The benchmark runners set this themselves; the
+        manifest-driven path reaches it through here.
+
+        Without OPENCODE_PERMISSION the session auto-rejects reads of its own
+        working tree, so the agent stops after its first tool call.
+        """
+        env = {"XDG_CONFIG_HOME": str(ninerouter.config_home())}
+        if workspace is not None:
+            allow = {"*": "deny", str(workspace): "allow", f"{workspace}/**": "allow"}
+            env["OPENCODE_PERMISSION"] = json.dumps({"external_directory": allow})
+        return env
 
     def apply(self, *, allow: list[str] | None = None) -> Result:
         data = _read_json(self.spec.config_path)
@@ -307,7 +329,7 @@ class DeepseekAdapter(Adapter):
         )
         return Result(True, f"{len(models)} models", self.spec.config_path, backup)
 
-    def run_env_set(self) -> dict[str, str]:
+    def run_env_set(self, *, workspace: Path | None = None) -> dict[str, str]:
         return {"NINEROUTER_API_KEY": config.NINEROUTER_API_KEY}
 
 
@@ -361,7 +383,7 @@ class ClaudeCodeAdapter(Adapter):
         backup = _write_json(self.spec.config_path, data)
         return Result(True, f"{len(models)} models", self.spec.config_path, backup)
 
-    def run_env_set(self) -> dict[str, str]:
+    def run_env_set(self, *, workspace: Path | None = None) -> dict[str, str]:
         """Environment that keeps the CLI on the gateway."""
         env = {"ANTHROPIC_AUTH_TOKEN": config.NINEROUTER_API_KEY}
         if config.NINEROUTER_BASE_URL:

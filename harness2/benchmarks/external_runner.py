@@ -193,7 +193,7 @@ def run_one(
 
     full_prompt = build_prompt(prompt, workspace)
     argv = substrate.argv(full_prompt, workspace, model, continue_last=continue_last)
-    env = substrate.exec_env(os.environ)
+    env = substrate.exec_env(os.environ, workspace=workspace)
 
     session = run_dir / f"{harness}_session.jsonl"
     stderr_log = run_dir / f"{harness}_stderr.log"

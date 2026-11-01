@@ -170,12 +170,19 @@ window.act = async (id, what) => {
 // Continue this task: the new one runs in the same workspace, with this task's
 // files still in reach, and the harness resumes the conversation it left.
 window.continuing = null;
-window.startContinue = id => {
+window.startContinue = async id => {
+  const j = await sjson('/api/tasks/' + id);
+  if (!j || j.error) return;
   continuing = id;
   const bar = document.getElementById('cont');
   bar.style.display = 'block';
   bar.textContent = 'Continuing task ' + id + ' — type the follow-up and press Run';
   bar.dataset.parent = id;
+  // The child inherits the parent's project and harness, so show them: a
+  // selector left on whatever was picked last reads as if the follow-up runs
+  // there, and the user finds out otherwise only from the new task's row.
+  document.getElementById('project').value = j.project;
+  document.getElementById('harness').value = j.harness;
   document.getElementById('task').focus();
 };
 window.stopContinue = () => {

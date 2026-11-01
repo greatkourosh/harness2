@@ -132,13 +132,17 @@ class ExternalCliSubstrate:
             argv.append(self.spec.continue_flag)
         return argv
 
-    def exec_env(self, base_env: Mapping[str, str]) -> dict[str, str]:
+    def exec_env(self, base_env: Mapping[str, str], *, workspace: Path | None = None) -> dict[str, str]:
         """The manifest's env plus the gateway credential a harness may need.
 
         Each harness reaches the gateway through its own config (see
         `harness2.harnesses.adapters`), so this only supplies the variables a
         harness resolves at runtime rather than from a file -- the deepseek
         harness, for instance, reads `NINEROUTER_API_KEY` as a CredentialRef.
+
+        `workspace` is passed to the adapter, which needs it to fence a harness
+        that gates its own file access (opencode: without the fence the session
+        auto-rejects reads of its own working tree and stops after one tool call).
         """
         env = dict(base_env)
         adapter = self.adapter()
@@ -151,7 +155,7 @@ class ExternalCliSubstrate:
             env[key] = str(Path(value).expanduser()) if value.startswith(("~", "/")) else value
         # Applied AFTER the drops: a value the adapter supplies is meant to win
         # over the ambient environment it just cleared.
-        env.update(adapter.run_env_set())
+        env.update(adapter.run_env_set(workspace=workspace))
         if config.NINEROUTER_API_KEY:
             env.setdefault("NINEROUTER_API_KEY", config.NINEROUTER_API_KEY)
         return env

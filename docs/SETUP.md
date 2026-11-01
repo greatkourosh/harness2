@@ -87,7 +87,9 @@ answers and that the provider block is present.
 
 The pinned OpenCode rejects a global `~/.config/opencode/opencode.json`
 written for a newer schema, so every Harness² run points `XDG_CONFIG_HOME` at
-`dependencies/opencode-config` instead of the user's own config directory.
+`dependencies/opencode-config` instead of the user's own config directory. That
+covers the manifest-driven path too — `harness2-harness run` and the task panel
+reach it through the harness adapter, not only through the benchmark runners.
 
 The same gateway also backs the other agent frameworks on the machine. See the
 [harness control plane](HARNESSES.md) for `harness2-harness`, which keeps pi,

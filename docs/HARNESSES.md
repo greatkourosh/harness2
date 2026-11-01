@@ -80,7 +80,7 @@ the user's own file, often carrying settings this package knows nothing about.
 | id | config | headless | model group |
 |---|---|---|---|
 | `pi` | `~/.pi/agent/models.json` | `pi --print` | routing combos |
-| `opencode` | `~/.config/opencode/opencode.json` | `opencode run` | Claude |
+| `opencode` | `~/.config/opencode/opencode.json` | `opencode run … --format json` | Claude |
 | `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
 | `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
@@ -100,6 +100,26 @@ Note the two dsh facts the manifest encodes, both verified by running it:
 - **`dsh --profile headless` takes no `--model` flag.** The model comes from the
   profile's `agent-default-model` plugin, so `model_flag` is empty and `apply`
   writes that entry — a provider block alone would leave the run with no model.
+
+Three more facts the opencode manifest encodes, each one a way a run failed
+before it was written down:
+
+- **The model id carries the provider prefix.** `opencode run --model` wants
+  OpenCode's `provider/model` form, so `default_model` is
+  `9router/claude-sonnet-4-6`. A bare id resolves to `Model not found:
+  claude-sonnet-4-6/.` — and the reverse holds for `claude-code`, which takes
+  the bare id, which is why `_resolve_model` does not qualify the id for every
+  harness and each manifest states its own.
+- **`--format json` is required, not decorative.** In its default text mode
+  opencode prints the closing message as bare prose. Both readers here
+  (`_final_text`, `render_events`) parse the event stream instead, so a task
+  that answered correctly was recorded as `answer: null` and shown as having
+  produced nothing. The JobBench runner passes the same flag.
+- **The session needs `OPENCODE_PERMISSION`.** Without it opencode auto-rejects
+  reads of its own working tree, so the agent stops after its first tool call
+  and the run looks like a completed task that did nothing. The fence allows the
+  run's workspace and denies the rest; `OpencodeAdapter.run_env_set` supplies it
+  from the workspace `exec_env` is told about.
 
 ## Getting the binaries on PATH
 
