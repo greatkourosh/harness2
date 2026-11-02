@@ -11,6 +11,56 @@ harness2-web --port 9000
 There is also a launcher: **Harness2 Tasks** in the application menu starts the
 panel and opens it in the browser.
 
+### Running it as a service
+
+On this machine the panel runs as a user unit rather than a background process,
+so it survives a logout and comes back after a reboot:
+
+```bash
+systemctl --user status harness2-web.service
+systemctl --user restart harness2-web.service
+journalctl --user -u harness2-web.service -f
+```
+
+The unit sets `WorkingDirectory` to the repo and nothing else: `harness2/config.py`
+loads `.env` itself (`load_dotenv` uses `setdefault`, so the shell still wins),
+which is what puts the 9router base URL, key and models in the panel's
+environment. That is worth knowing because a unit that starts with a bare
+environment would otherwise route every task to a harness with no gateway — the
+task would fail at the first model call, not at startup.
+
+`Linger` is on for this user, so the unit keeps running with no login session.
+
+The menu launcher (`~/.local/bin/harness2-web-ui`) opens the panel and starts it
+only if it is not already answering; it used to start a second copy
+unconditionally, which then lost the race for port 8090 and printed "Address
+already in use" instead of opening anything.
+
+### Local domain
+
+`https://harness2.local` serves the panel through the host's Caddy, the same way
+the other projects are reached (see `PER_PROJECT_DOMAINS.md` in the
+`project_manager` repo for the full wildcard-DNS/PKI setup).
+
+```bash
+curl -so /dev/null -w '%{http_code}\n' https://harness2.local/   # 200
+```
+
+Two details that are easy to get wrong when adding another host this way:
+
+- **The TLS leaf is its own.** `harness2.local` has a standalone Caddy block and
+  its own mkcert leaf (`/etc/caddy/harness2-local.pem`), rather than a SAN added
+  to the shared `project-local.pem`. That shared leaf covers every `*.local`
+  project, so extending it means reissuing one certificate for all of them —
+  and `.local` is on the Public Suffix List, so a mistake there is a browser
+  cert error on twenty hosts at once. A separate leaf has no blast radius, and
+  the same trusted CA signs it, so nothing changes for the browser.
+- **The block still needs an `@host` matcher.** A bare `harness2.local { … }`
+  works for Caddy but not for the dashboard: `modules/domains.py` reads routes
+  by scanning for `@name host <domain>.local`, so the panel would list the
+  domain as having *no route* and probe it as unreachable. The matcher is what
+  makes it visible to the panel, not just routable.
+
 ## What it is for
 
 The CLI runs one task and you wait for it. The panel is for when you have
@@ -148,5 +198,8 @@ reporting success for work you stopped is worse than reporting nothing.
 - **A non-git project is written to directly.** That is the trade: no safe cheap
   copy. If you are about to point the panel at something you care about, check
   whether it is a repository first.
-- **State is in memory.** Restarting the panel loses the task list, though each
-  run's own directory under `runs/web/<job-id>/` survives.
+- **The task list survives a restart.** It is persisted to `runs/web/index.json`,
+  which matters beyond convenience: continuing a task needs the earlier one still
+  in the list. A task that was mid-run when the panel stopped comes back as
+  `interrupted`, not `running` — the run thread that would have finished it is
+  gone, and a task cannot be left running by a process that no longer exists.
