@@ -259,12 +259,18 @@ class JobStore:
 
         job_id = uuid.uuid4().hex[:12]
         if parent:
-            # Continue in the directory the earlier run ACTUALLY worked in, not
-            # the clone it started from. A fresh run is seeded from the clone into
-            # its own `<root>/<id>/workspace`, and every file it wrote is in there;
-            # resuming the conversation somewhere else finds neither the files nor
-            # the harness's own session, which it looks up by working directory.
-            workspace, cloned = parent.run_dir / "workspace", parent.cloned
+            # Where the parent's files and its harness session actually are --
+            # which is not the same field for both kinds of parent. `run_one`
+            # gives a fresh run `<run_dir>/workspace` and only copies into it, so
+            # that path is right for the FIRST job; `job.workspace` there is the
+            # clone it was seeded from. A continuing run is handed that directory
+            # as a working directory and runs in it, so for every later job
+            # `workspace` is the real one. Reading the run dir in both cases sent
+            # the third job of a thread to a directory no harness ever ran in:
+            # the conversation it was told to resume did not exist, it started
+            # from nothing, and it answered "ok".
+            workspace = parent.workspace if parent.continues else parent.run_dir / "workspace"
+            cloned = parent.cloned
             project = parent.project  # the child shows the project it runs in
         else:
             workspace, cloned = self._prepare(project_path, job_id)

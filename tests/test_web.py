@@ -385,6 +385,57 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(seen["task_dir"], Path(parent["run_dir"]) / "workspace")
         self.assertEqual(store.get(child["id"])["continues"], parent["id"])
 
+    def test_a_third_task_in_the_thread_keeps_the_same_workspace(self):
+        """The workspace must survive past the second task.
+
+        Only the FIRST job of a thread works in its own run dir; every later one
+        is handed the directory before it. Rebuilding the path from the parent's
+        run dir is therefore right once and wrong from the third job on -- it
+        names a directory the harness has never run in, so the conversation it is
+        told to resume does not exist and the task starts from nothing and
+        answers "ok". A one-hop test passes either way.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        store = self._store(root / "runs")
+        first = self._seed_parent(store, root, Path(tmp.name))
+
+        def capture(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text(
+                json.dumps({"exit_code": 0, "delivered": [], "answer": "did it"}),
+                encoding="utf-8",
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=capture
+        ):
+            second = store.submit("then step 3", "", continue_from=first["id"])
+            self._quiet(store)
+            # Where the second job ran. Its own directory, not the one the first
+            # was seeded into -- and this is what the third must be handed.
+            home = Path(store.get(second["id"])["workspace"])
+            (home / "output").mkdir(parents=True, exist_ok=True)
+            (home / "output" / "step3.txt").write_text("step 3 here")
+            third = store.submit("then step 4", "", continue_from=second["id"])
+            self._quiet(store)
+
+        self.assertNotEqual(
+            home, Path(first["workspace"]), "the fixture must move the thread on"
+        )
+        self.assertEqual(
+            Path(store.get(third["id"])["workspace"]),
+            home,
+            "the third task must run in step 3's directory, not a fresh empty one",
+        )
+        self.assertTrue(
+            (home / "output" / "step3.txt").is_file(),
+            "the files the thread produced must still be in reach",
+        )
+
     def test_continue_inherits_project_and_harness(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
