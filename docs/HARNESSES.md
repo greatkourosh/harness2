@@ -124,13 +124,22 @@ before it was written down:
 ## Getting the binaries on PATH
 
 `harness2-harness run` and `bench` exec the harness's `binary` by name, so it
-must be resolvable on `PATH`. `harness2-harness list` shows `runs: no` for any
-harness whose binary is missing.
+must be resolvable on `PATH`. `harness2-harness list` does not check this: its
+`runs` column reflects the manifest's `can_run` (whether the harness has a
+non-interactive mode at all), so a missing binary still shows `runs: yes` and the
+failure only appears when a run execs it.
 
-`claude` installs itself on `PATH`. The other three do not, and each needs a
-different treatment:
+`claude` does not necessarily install itself somewhere every shell can see: the
+npm install on this machine puts it under nvm
+(`~/.nvm/versions/node/<ver>/bin/claude`), which only reaches `PATH` from a login
+shell that has run `nvm use`. The other three do not install onto `PATH` either,
+and each needs a different treatment. Putting all four in `~/.local/bin` is what
+makes them resolvable by name:
 
 ```bash
+# claude: a symlink to the nvm install is enough.
+ln -sf ~/.nvm/versions/node/<ver>/bin/claude ~/.local/bin/claude
+
 # pi and dsh ship an executable file with a `#!/usr/bin/env node` shebang,
 # so a symlink is enough.
 ln -sf ~/projects/pi_harness/packages/coding-agent/dist/bundle/cli.js ~/.local/bin/pi
@@ -152,10 +161,15 @@ EOF
 chmod +x ~/.local/bin/opencode
 ```
 
-Verify with `pi --version`, `dsh --version`, `opencode --version`.
+Verify with `claude --version`, `pi --version`, `dsh --version`,
+`opencode --version`.
 
-Alternatively, set `binary` in the manifest to an absolute path and skip
-`PATH` entirely — the runner takes either.
+`~/.local/bin` is on `PATH` for a login shell (via `~/.bashrc` / `~/.profile`)
+but **not** for a systemd unit, which sources neither — so a harness that works
+from your terminal can still die at `exec` with exit 127 when the
+[panel runs as a service](WEB-PANEL.md#the-unit-needs-localbin-on-path). Give the
+unit an explicit `Environment=PATH=...`, or set `binary` in the manifest to an
+absolute path and skip `PATH` entirely — the runner takes either.
 
 ## Model isolation
 

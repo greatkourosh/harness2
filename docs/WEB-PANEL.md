@@ -22,12 +22,12 @@ systemctl --user restart harness2-web.service
 journalctl --user -u harness2-web.service -f
 ```
 
-The unit sets `WorkingDirectory` to the repo and nothing else: `harness2/config.py`
-loads `.env` itself (`load_dotenv` uses `setdefault`, so the shell still wins),
-which is what puts the 9router base URL, key and models in the panel's
-environment. That is worth knowing because a unit that starts with a bare
-environment would otherwise route every task to a harness with no gateway — the
-task would fail at the first model call, not at startup.
+The unit sets `WorkingDirectory` to the repo and a `PATH` (see below) and nothing
+else: `harness2/config.py` loads `.env` itself (`load_dotenv` uses `setdefault`,
+so the shell still wins), which is what puts the 9router base URL, key and models
+in the panel's environment. That is worth knowing because a unit that starts with
+a bare environment would otherwise route every task to a harness with no
+gateway — the task would fail at the first model call, not at startup.
 
 `Linger` is on for this user, so the unit keeps running with no login session.
 
@@ -35,6 +35,42 @@ The menu launcher (`~/.local/bin/harness2-web-ui`) opens the panel and starts it
 only if it is not already answering; it used to start a second copy
 unconditionally, which then lost the race for port 8090 and printed "Address
 already in use" instead of opening anything.
+
+#### The unit needs `~/.local/bin` on `PATH`
+
+```ini
+Environment=PATH=/home/kourosh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+```
+
+The panel spawns each harness's `binary` from its manifest by name, and all four
+live in `~/.local/bin` (`opencode` as a wrapper, `pi` and `dsh` as symlinks,
+`claude` under nvm at `~/.nvm/versions/node/<ver>/bin/claude`). A login shell
+puts that directory on `PATH` through `~/.bashrc` and `~/.profile`, but systemd
+sources neither and falls back to its own compiled-in `PATH`
+(`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:
+/usr/local/games:/snap/bin:/snap/bin`), which omits it. The failure is not at
+startup and not at the model call: the task starts, then every run dies at
+`exec` with **exit 127** and `could not exec claude: [Errno 2] No such file or
+directory: 'claude'` in the run's `<harness>_stderr.log`. It affects every
+harness, not just the one named in the message.
+
+To check a running panel before touching manifests or the repo:
+
+```bash
+tr '\0' '\n' < /proc/$(systemctl --user show -p MainPID --value harness2-web.service)/environ | grep ^PATH
+```
+
+Note the unit file lives only in `~/.config/systemd/user/` and is not in this
+repo, so an edit there is not version-controlled. Do not reach for
+`harness2-harness list` to confirm this: its `runs` column reflects the
+manifest's `can_run`, not whether the binary resolves, so it reports `yes` even
+when nothing on `PATH` would exec. Use `command -v <binary>` under the unit's
+`PATH`, or the `/proc` line above. The manifest's `binary` also takes an absolute
+path, which skips `PATH` resolution entirely (see
+[harnesses](HARNESSES.md#getting-the-binaries-on-path)).
+
+After editing the unit: `systemctl --user daemon-reload && systemctl --user
+restart harness2-web.service`.
 
 ### Local domain
 
