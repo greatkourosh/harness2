@@ -30,7 +30,8 @@ class RegistryTests(unittest.TestCase):
         specs = registry.load_all()
         ids = {s.id for s in specs}
         self.assertEqual(
-            ids, {"pi", "opencode", "deepseek", "claude-code", "claude-desktop"}
+            ids,
+            {"pi", "opencode", "deepseek", "claude-code", "claude-desktop", "t3code"},
         )
         for spec in specs:
             self.assertTrue(spec.config_path.is_absolute(), spec.id)
@@ -209,6 +210,89 @@ class AdapterTests(unittest.TestCase):
         result = adapter.run("hi", model="m", cwd=Path("."))
         self.assertFalse(result.ok)
         self.assertIn("non-interactive", result.detail)
+
+    def _t3_adapter(self, tmp: str):
+        spec = registry.load_one("t3code")
+        return adapters.T3CodeAdapter(
+            type(spec)(**{**spec.__dict__, "config_path": Path(tmp)})
+        )
+
+    def test_t3code_apply_wires_the_gateway_into_service_env(self):
+        """t3's server inherits a dotenv, and that is the only way in: it keeps
+        providers and models in a database, so there is no config file to rewrite."""
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = self._t3_adapter(tmp)
+            with patch.object(
+                adapters.config, "NINEROUTER_BASE_URL", "http://127.0.0.1:20128/v1"
+            ), patch.object(adapters.config, "NINEROUTER_API_KEY", "sk-test"):
+                result = adapter.apply(allow=["claude-sonnet-4-6"])
+            self.assertTrue(result.ok, result.detail)
+            text = (Path(tmp) / "service.env").read_text(encoding="utf-8")
+            self.assertIn("ANTHROPIC_BASE_URL=http://127.0.0.1:20128\n", text, "/v1 stripped")
+            self.assertIn("ANTHROPIC_AUTH_TOKEN=sk-test", text)
+            self.assertIn("ANTHROPIC_API_KEY=\n", text, "empty, not absent")
+
+    def test_t3code_apply_says_it_wrote_no_model_list(self):
+        """`apply` REWRITES a peer's model list from the group; t3 has nowhere to
+        put one, so the detail must say so rather than imply a group was written."""
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = self._t3_adapter(tmp)
+            with patch.object(
+                adapters.config, "NINEROUTER_BASE_URL", "http://127.0.0.1:20128/v1"
+            ), patch.object(adapters.config, "NINEROUTER_API_KEY", "sk-test"):
+                result = adapter.apply(allow=["claude-sonnet-4-6"])
+            self.assertIn("model", result.detail.lower())
+            self.assertEqual(adapter.configured_models(), [])
+
+    def test_t3code_apply_preserves_unrelated_service_env_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "service.env"
+            path.write_text("# mine\nT3CODE_PORT=9999\n", encoding="utf-8")
+            adapter = self._t3_adapter(tmp)
+            with patch.object(
+                adapters.config, "NINEROUTER_BASE_URL", "http://127.0.0.1:20128/v1"
+            ), patch.object(adapters.config, "NINEROUTER_API_KEY", "sk-test"):
+                adapter.apply(allow=[])
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("# mine", text, "the comment survives")
+            self.assertIn("T3CODE_PORT=9999", text, "a hand-set value is not overwritten")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600, "holds a gateway key")
+
+    def test_t3code_headless_puts_the_prompt_after_the_project(self):
+        """`thread start` takes <project> <message>; the other order sends the
+        prompt as the project and the command fails."""
+        spec = registry.load_one("t3code")
+        self.assertEqual(spec.model_flag, "")
+        argv = ExternalCliSubstrate("t3code").argv("do the thing", Path("/ws"), "")
+        self.assertEqual(argv[:2], ["t3", "thread"])
+        self.assertLess(argv.index("."), argv.index("do the thing"))
+        self.assertIn("--wait", argv)
+        self.assertIn("--json", argv)
+        self.assertEqual(argv.count("--model"), 1, "the pinned pair, and only once")
+
+    def test_t3code_pins_a_provider_and_model_the_gateway_answers(self):
+        """t3 refuses `--model` without `--provider`, and a manifest holds one
+        flag, so the pair is pinned as literal argv. It must name claude-sonnet-4-6:
+        that is the id 9router answers for BARE, and t3's own default
+        (claude-opus-5-5) is not served that way, so a bare thread start fails."""
+        argv = ExternalCliSubstrate("t3code").argv("hi", Path("/ws"), "")
+        self.assertIn("--provider", argv)
+        self.assertEqual(argv[argv.index("--provider") + 1], "claudeAgent")
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-sonnet-4-6")
+
+    def test_t3code_ignores_a_caller_supplied_model(self):
+        """model_flag is empty on purpose: a caller's model would otherwise be
+        appended as a second --model beside the pinned pair."""
+        argv = ExternalCliSubstrate("t3code").argv("hi", Path("/ws"), "some-other-model")
+        self.assertNotIn("some-other-model", argv)
+        self.assertEqual(argv.count("--model"), 1)
+
+    def test_t3code_is_runnable_because_claude_ships_in_its_image(self):
+        """t3 drives agents but never ships one, so it is only runnable while an
+        agent is baked into its container image — claude-code is."""
+        spec = registry.load_one("t3code")
+        self.assertTrue(spec.can_run)
+        self.assertIn("t3code", [s.id for s in registry.candidates(registry.load_all())])
 
 
 class SubstrateTests(unittest.TestCase):

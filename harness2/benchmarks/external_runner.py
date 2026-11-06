@@ -140,6 +140,12 @@ def _final_text(session: Path) -> str:
         if etype == "result" and isinstance(ev.get("result"), str) and ev["result"].strip():
             last_result = ev["result"]
             continue
+        # t3 code: `thread start --wait --json` prints one object carrying the
+        # reply under `reply` (beside threadId/runId/status). It is neither the
+        # claude nor the codex/opencode shape, so it needs its own branch.
+        if isinstance(ev.get("reply"), str) and ev["reply"].strip():
+            last_result = ev["reply"]
+            continue
         # codex and opencode: a thread item / part carrying text.
         item = ev.get("item") if isinstance(ev.get("item"), dict) else ev.get("part")
         if isinstance(item, dict):

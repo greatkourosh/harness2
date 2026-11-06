@@ -83,6 +83,59 @@ def _write_json(path: Path, data: dict) -> Path | None:
     return backup
 
 
+def _read_env(path: Path) -> dict[str, str]:
+    """Parse a dotenv file into a dict; a missing file yields {}."""
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key:
+            out[key] = value
+    return out
+
+
+def _write_env(path: Path, updates: dict[str, str], *, defaults: dict[str, str]) -> Path | None:
+    """Merge `updates` into a dotenv file, preserving comments and line order.
+
+    `updates` are written unconditionally — they are what `apply` exists to set.
+    `defaults` are filled in only where the key is absent, so a value the user
+    set by hand survives: the same merge-don't-clobber rule the other adapters
+    follow for a harness config that is the user's own file. Written 0600,
+    because this one carries a gateway key.
+    """
+    backup = _backup(path)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    present: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            present.add(stripped.partition("=")[0].strip())
+    merged = {**{k: v for k, v in defaults.items() if k not in present}, **updates}
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.partition("=")[0].strip()
+            if key in merged:
+                out.append(f"{key}={merged[key]}")
+                seen.add(key)
+                continue
+        out.append(line)
+    out.extend(f"{key}={value}" for key, value in merged.items() if key not in seen)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return backup
+
+
 class Adapter:
     """Base adapter: read/write one config, describe one harness."""
 
@@ -110,9 +163,18 @@ class Adapter:
 
     # -- running ---------------------------------------------------------
 
+    def _refuse_run_detail(self) -> str:
+        """Why `run` refuses a harness with can_run = false.
+
+        Not "no non-interactive mode" for every harness: claude-desktop genuinely
+        has none, but others are declared unrunnable for a different reason and
+        the message must say which, or the refusal misdiagnoses itself.
+        """
+        return f"{self.spec.label} has no non-interactive mode"
+
     def run(self, prompt: str, *, model: str, cwd: Path, timeout: int = 600) -> Result:
         if not self.spec.can_run:
-            return Result(False, f"{self.spec.label} has no non-interactive mode")
+            return Result(False, self._refuse_run_detail())
         if not self.spec.binary or shutil.which(self.spec.binary) is None:
             return Result(False, f"{self.spec.binary or 'binary'} not on PATH")
         argv = [self.spec.binary]
@@ -431,12 +493,76 @@ class ClaudeDesktopAdapter(Adapter):
         )
 
 
+class T3CodeAdapter(Adapter):
+    """t3 code: a dotenv, because t3 keeps its state in a database.
+
+    Every other peer here has a config file naming its models, so `apply` can
+    rewrite the model group into it. t3 has no such file: provider instances and
+    model selections live in a SQLite database under its home, so `allow` has
+    nowhere to go and this adapter says so rather than inventing a model list.
+
+    What it *can* write is the one file surface t3 does read — `service.env`,
+    which the server inherits at startup. That is how t3's own docs point its
+    claude provider at a gateway, so it is also how this peer joins 9router.
+    """
+
+    def _env_path(self) -> Path:
+        return self.spec.config_path / "service.env"
+
+    def _refuse_run_detail(self) -> str:
+        return (
+            f"{self.spec.label} has a headless mode, but its container holds only "
+            f"t3 and no agent for it to drive; add one and set can_run = true in "
+            f"its manifest. Its own UI is at http://127.0.0.1:5733"
+        )
+
+    def current(self) -> dict:
+        return {"service_env": _read_env(self._env_path())}
+
+    def configured_models(self) -> list[str]:
+        # t3 names no models in a file to read. Returning [] is the honest
+        # answer, and the same one claude-desktop gives for the same reason.
+        return []
+
+    def apply(self, *, allow: list[str] | None = None) -> Result:
+        path = self._env_path()
+        if not config.NINEROUTER_API_KEY:
+            return Result(
+                False,
+                "HARNESS2_9ROUTER_API_KEY is not set, so there is no gateway key to "
+                "hand t3; set it in .env and re-run",
+                path,
+            )
+        updates = {}
+        if config.NINEROUTER_BASE_URL:
+            updates["ANTHROPIC_BASE_URL"] = config.NINEROUTER_BASE_URL.removesuffix("/v1")
+        updates["ANTHROPIC_AUTH_TOKEN"] = config.NINEROUTER_API_KEY
+        # Explicitly empty, not absent: a gateway key is a bearer token, and two
+        # credentials make the CLI choose between them and hang (the same
+        # hazard claude-code.toml records).
+        updates["ANTHROPIC_API_KEY"] = ""
+        # Defaults only: if you set a port by hand, `apply` must not move it.
+        backup = _write_env(
+            path,
+            updates,
+            defaults={"T3CODE_HOST": "127.0.0.1", "T3CODE_PORT": "5733"},
+        )
+        return Result(
+            True,
+            "gateway wired into service.env (models are chosen in T3 Code itself, "
+            "so no model list is written); restart the container to apply",
+            path,
+            backup,
+        )
+
+
 ADAPTERS: dict[str, type[Adapter]] = {
     "pi": PiAdapter,
     "opencode": OpencodeAdapter,
     "deepseek": DeepseekAdapter,
     "claude-code": ClaudeCodeAdapter,
     "claude-desktop": ClaudeDesktopAdapter,
+    "t3code": T3CodeAdapter,
 }
 
 

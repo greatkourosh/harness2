@@ -84,10 +84,60 @@ the user's own file, often carrying settings this package knows nothing about.
 | `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
 | `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
+| `t3code` | `/media/kourosh/DEVNVME/docker/t3code-001/data` | `claude-sonnet-4-6` (pinned) | *(chosen in T3 Code)* |
 
 `claude-desktop` is inventory-only: the Electron app has no flag that takes a
 prompt and prints an answer. Its Code sessions run through the `claude` CLI, so
 they are the `claude-code` harness.
+
+`t3code` is [T3 Code](https://github.com/pingdotgg/t3code), and it is the odd one
+out in three ways, all verified by running it:
+
+- **It is a control surface, not an agent** — the same category as this package.
+  It wraps agents it finds on PATH and adds web/mobile/desktop frontends. It is
+  registered here as a peer because it has a headless mode (`t3 thread start …`)
+  and a dotenv its server inherits, which is how its own docs point its claude
+  provider at a gateway.
+- **`apply` writes no model group.** Every other peer names its models in a
+  config file, so `apply` rewrites the group into it. t3 keeps providers and
+  models in a SQLite database, so there is nowhere to put one. What it writes
+  instead is `service.env` — the one file t3 reads — carrying
+  `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` (the last
+  explicitly empty) so its claude provider spends the gateway. `show` reports
+  `configured (none)` for the same reason.
+- **It is containerized.** t3 runs from its own container at
+  `/media/kourosh/DEVNVME/docker/t3code-001/`, image
+  `192.168.1.13:7001/t3code:0.1.7`. `docker exec` is the only way in: the CLI
+  finds its server through `<home>/userdata/server-runtime.json` and has no
+  `--url`, so a host `t3` cannot reach a containerized server over the network.
+  `~/.local/bin/t3` is that wrapper, and it passes `-w "$PWD"` because a relative
+  project argument (`t3 thread start .`) resolves against the container's cwd.
+  The harness2 tree is bind-mounted at its own absolute path so a workspace
+  resolves to the same project on both sides.
+
+**What runs in it.** t3 only *drives* agents — it never ships one — so
+`claude@2.1.318` is baked into the image and is the one provider t3
+acknowledges. It reaches 9router through the `ANTHROPIC_BASE_URL`/
+`ANTHROPIC_AUTH_TOKEN` this adapter puts in `service.env`; t3 reports it as
+`auth: customEndpoint`. Two things had to be true for a run to complete, and both
+were found by running it:
+
+- **Not root.** t3 starts claude with `--dangerously-skip-permissions`, which
+  claude refuses as root ("exited before it started"). `compose.yml` sets
+  `user: "1000:1000"`, which is also this host's uid and the image's `node`
+  user — so `data/` and every run workspace stay owned by the same account on
+  both sides of the bind mount.
+- **A model the gateway answers.** t3's argv pins `--provider claudeAgent
+  --model claude-sonnet-4-6` as literal arguments, not through `model_flag`: a
+  manifest holds one flag, and t3 refuses `--model` without `--provider`.
+  `claude-sonnet-4-6` is the id 9router serves BARE. t3's own default
+  (`claude-opus-5-5`) is not served that way, so a bare `thread start` fails with
+  "It may not exist or you may not have access to it".
+
+A thread needs its working directory inside a project registered with
+`t3 project add`; this repo's root is registered, so `harness2-harness run
+t3code` works from the repo root. t3 reports no token usage, so `turn_count` and
+the token counts in `metrics.json` are null rather than zero.
 
 The deepseek adapter needs `pyyaml` (`uv pip install -e '.[harnesses]'`).
 

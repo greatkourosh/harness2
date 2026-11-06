@@ -42,10 +42,10 @@ already in use" instead of opening anything.
 Environment=PATH=/home/kourosh/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-The panel spawns each harness's `binary` from its manifest by name, and all four
-live in `~/.local/bin` (`opencode` as a wrapper, `pi` and `dsh` as symlinks,
-`claude` under nvm at `~/.nvm/versions/node/<ver>/bin/claude`). A login shell
-puts that directory on `PATH` through `~/.bashrc` and `~/.profile`, but systemd
+The panel spawns each harness's `binary` from its manifest by name, and they all
+live in `~/.local/bin` (`opencode` and `t3` as wrappers, `pi` and `dsh` as
+symlinks, `claude` under nvm at `~/.nvm/versions/node/<ver>/bin/claude`). A
+login shell puts that directory on `PATH` through `~/.bashrc` and `~/.profile`, but systemd
 sources neither and falls back to its own compiled-in `PATH`
 (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:
 /usr/local/games:/snap/bin:/snap/bin`), which omits it. The failure is not at

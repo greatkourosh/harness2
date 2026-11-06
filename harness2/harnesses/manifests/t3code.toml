@@ -1,0 +1,59 @@
+# t3 code — pingdotgg's control surface, run from its own container.
+#
+# NOT an agent CLI: t3 wraps agents it finds on PATH (claude, codex, pi, …) and
+# adds web/mobile/desktop frontends plus an MCP server. It is a peer here
+# because it has a non-interactive surface (`t3 thread start … --wait --json`)
+# and its server inherits a dotenv file, which is how its claude provider is
+# pointed at the gateway.
+#
+# `binary` is a wrapper in ~/.local/bin, not the binary itself: the CLI finds
+# its server through <base-dir>/userdata/server-runtime.json and has no --url,
+# so it cannot reach a containerized server over the network and must exec
+# inside. Same shape as the opencode wrapper.
+#
+# config_path is the container's *directory*: `installed()` tests Path.exists()
+# and the adapter writes service.env inside it, so naming the file would report
+# "not installed" until the service was set up and the router would never pick
+# it.
+
+id = "t3code"
+label = "T3 Code (pingdotgg, containerized)"
+config_path = "/media/kourosh/DEVNVME/docker/t3code-001/data"
+config_format = "t3-home"
+adapter = "t3code"
+key_name = "t3code"
+
+binary = "t3"
+# `thread start` takes <project> <message>, so the prompt is the SECOND
+# positional — putting it first would send it as the project.
+#
+# --provider/--model are pinned as literal arguments, not through model_flag:
+# a manifest carries one flag, and t3 refuses `--model` without `--provider`
+# ("--provider and model go together"), so the pair cannot be expressed as a
+# single flag. The model is claude-sonnet-4-6 because that is the id the gateway
+# answers for BARE — t3's own default (claude-opus-5-5) is not served that way
+# ("It may not exist or you may not have access to it"), so a bare thread start
+# against 9router fails. Verified: `claude -p ... --model claude-sonnet-4-6`
+# returns the answer; `--model claude-opus-5-5` does not.
+headless = [
+  "thread", "start", ".",
+  "{prompt}",
+  "--provider", "claudeAgent",
+  "--model", "claude-sonnet-4-6",
+  "--wait", "--json",
+]
+# Empty, so a caller-supplied model is dropped rather than appended as a second
+# --model beside the pinned pair. Change the pin in `headless` above instead.
+model_flag = ""
+trace_glob = "/media/kourosh/DEVNVME/docker/t3code-001/data/userdata/logs/*.ndjson"
+
+# t3 only DRIVES agents — it never ships one — so claude-code is baked into the
+# image (Dockerfile, pinned 2.1.318) and spends the gateway through the
+# service.env vars this adapter writes. claude-code is the one provider t3
+# acknowledges, so `thread start` can now complete a turn.
+can_run = true
+
+# Routing: t3 is the planning/orchestration surface, deliberately not competing
+# with pi (priority 10, code/debug) or opencode (priority 5, plan/design/docs).
+routes = ["plan", "design", "orchestrate", "review"]
+priority = 3
