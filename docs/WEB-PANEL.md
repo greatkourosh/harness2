@@ -72,6 +72,38 @@ path, which skips `PATH` resolution entirely (see
 After editing the unit: `systemctl --user daemon-reload && systemctl --user
 restart harness2-web.service`.
 
+#### Editing the code needs a restart too
+
+The panel is an editable install: it imports `harness2` straight from this repo,
+so there is **no build step** — but the running process read the adapter
+registry, the harness manifests and the page HTML at import time and never
+re-reads them. A change lands on disk and the panel keeps serving the old code
+until
+
+```bash
+systemctl --user restart harness2-web.service
+```
+
+This is not cosmetic. Adding the `t3code` manifest and adapter and then running a
+task through the panel gave
+
+```
+ConfigError: no adapter for harness 't3code' (adapter='t3code');
+known: claude-code, claude-desktop, deepseek, opencode, pi
+```
+
+— the code was correct and committed; the process had started before the commit
+and its `ADAPTERS` dict had no such key. The same applies after editing a
+harness manifest, a substrate renderer, or `cli/web.py`'s `PAGE`.
+
+To tell whether a running panel predates your change, compare the unit's start
+time with the commit:
+
+```bash
+systemctl --user show -p ExecMainStartTimestamp --value harness2-web.service
+git log -1 --format=%ci
+```
+
 ### Local domain
 
 `https://harness2.local` serves the panel through the host's Caddy, the same way
@@ -119,9 +151,30 @@ does; picking one overrides that.
 page polls every 1.5s while anything is running and every 6s when everything has
 settled, so a quiet panel does not keep waking the machine.
 
-**Detail** — the selected task: workspace, harness, model, why it was routed
-there, exit code, the agent's **answer**, the delivered file names, and the
-harness's own output log.
+**Detail** — the selected task: the **prompt** it was given (first thing in the
+pane, so you do not have to remember what you asked), workspace, harness, model,
+why it was routed there, exit code, the agent's **answer**, the delivered file
+names, and the harness's own output log.
+
+#### The output log is rendered, not raw
+
+The log pane shows the captured stream through the same renderers the benchmark
+trajectory view uses (`harness2/substrate/codex.py`, `.../opencode.py`), so a
+task's log here reads like the same task's trajectory there: one
+`[ACTION]`/`[OBSERVATION]`/`[ASSISTANT]` line per event instead of one JSON
+object per line.
+
+Two shapes are not event streams and are handled separately:
+
+- **t3code** writes one object per turn (`{"threadId":…,"reply":…}`), not a
+  stream. It gets a small renderer of its own.
+- **pi** (`--print`) writes bare prose. There is nothing to parse, so the raw
+  text is the log.
+
+Anything no renderer recognises falls back to raw, and a harness that dies at
+startup writes only `<harness>_stderr.log`, which the pane shows while the
+session file is still empty. Rendering is capped at 40 000 characters
+(`jobs.LOG_MAX_CHARS`).
 
 ### What a task's state means
 
