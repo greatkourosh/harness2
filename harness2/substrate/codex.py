@@ -444,6 +444,37 @@ def _claude_stream_text(path: Path) -> str | None:
     return None
 
 
+def _claude_tool_args(name: str, payload, args_trunc: int) -> str:
+    """A tool call's arguments as something a person reads, not a Python repr.
+
+    `str(dict)` renders `{'command': 'ls -la'}` -- Python syntax no operator of
+    any other harness would recognise, and unreadable next to the codex path's
+    plain `[ACTION] shell: ls -la`. The one field worth surfacing varies by tool
+    (Bash's command, Write's path, Read's path), so a known key is lifted out
+    verbatim and everything else falls back to compact JSON.
+    """
+    if not isinstance(payload, dict):
+        return _clip(payload, args_trunc)
+    # A tool call whose input failed to parse arrives wrapped like this. The raw
+    # string is the arguments JSON concatenated with itself (the harness re-sends
+    # the same tool call, and the wrapper keeps both), so a plain `json.loads`
+    # dies on "Extra data" -- `raw_decode` reads the first object and ignores the
+    # rest, which recovers the same clean command the parsed path would show.
+    if "__unparsedToolInput" in payload:
+        raw = (payload.get("__unparsedToolInput") or {}).get("raw")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                inner, _ = json.JSONDecoder().raw_decode(raw)
+            except json.JSONDecodeError:
+                return _clip(raw, args_trunc)
+            return _claude_tool_args(name, inner, args_trunc)
+    for key in ("command", "file_path", "path", "pattern", "url", "prompt", "description"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return _clip(val, args_trunc)
+    return _clip(json.dumps(payload, ensure_ascii=False, default=str), args_trunc)
+
+
 def _render_claude_content(block: dict, lines: list[str], obs_trunc: int, args_trunc: int) -> None:
     """One content block of a claude assistant message, in the shared grammar."""
     btype = block.get("type", "")
@@ -453,7 +484,8 @@ def _render_claude_content(block: dict, lines: list[str], obs_trunc: int, args_t
         _emit_if(lines, "REASONING", block.get("thinking"), obs_trunc)
     elif btype == "tool_use":
         name = block.get("name") or "tool"
-        _emit(lines, f"[ACTION] {name}: {_clip(block.get('input'), args_trunc)}")
+        args = _claude_tool_args(name, block.get("input"), args_trunc)
+        _emit(lines, f"[ACTION] {name}: {args}")
     elif btype == "tool_result":
         body = _text_of(block.get("content"))
         _emit(lines, f"[OBSERVATION] {_clip(body, obs_trunc)}")

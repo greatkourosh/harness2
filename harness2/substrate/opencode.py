@@ -344,6 +344,24 @@ def _clip(s, n: int) -> str:
     return s[:n] + _TRUNC_FMT.format(n=len(s) - n)
 
 
+def _tool_args(payload, args_cap: int) -> str:
+    """A tool call's arguments as a person reads them, not a whole JSON object.
+
+    The raw `json.dumps(input)` printed the working directory and the harness's
+    own description beside the command, so `[ACTION] bash({...})` was seventy
+    characters of bookkeeping around an eight-character command. The same field
+    lift the claude path uses keeps the two renderers' output one shape.
+    """
+    if not isinstance(payload, dict):
+        return _clip(payload, args_cap)
+    for key in ("command", "filePath", "file_path", "path", "pattern", "url",
+                "description", "query", "content"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return _clip(val, args_cap)
+    return _clip(json.dumps(payload, ensure_ascii=False, default=str), args_cap)
+
+
 def render_events(path: Path, *, obs_trunc: int, max_chars: int, args_trunc: int = 400) -> str:
     """Render OpenCode's `--format json` JSONL event stream into the shared grammar.
 
@@ -393,8 +411,8 @@ def render_events(path: Path, *, obs_trunc: int, max_chars: int, args_trunc: int
             status = state.get("status", "")
             tin = state.get("input") or part.get("input") or part.get("args")
             tout = state.get("output") or state.get("result") or part.get("output")
-            args = json.dumps(tin, default=str, ensure_ascii=False) if tin is not None else ""
-            lines.append(f"[ACTION] {name}({_clip(args, args_cap)})")
+            args = _tool_args(tin, args_cap)
+            lines.append(f"[ACTION] {name}({args})")
             if status == "error":
                 lines.append(f"[OBSERVATION ERROR] {_clip(state.get('error'), obs_trunc)}")
             elif tout is not None:

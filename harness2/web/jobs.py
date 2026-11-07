@@ -46,8 +46,76 @@ from ..harnesses import registry
 
 PROJECTS_ROOT = Path("/media/kourosh/DEVNVME/projects")
 
+# How much of a rendered stream the panel keeps. The page shows one <pre>, and a
+# benchmark-sized rollout is far longer than anyone scrolls.
+LOG_MAX_CHARS = 40_000
+
+# What the substrate renderers return when they recognise no events. Kept as a
+# constant so the fallback below matches on a name, not on a copy of the string.
+_NO_EVENTS = "(no parseable events in trajectory)"
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+def _render_t3code(raw: str) -> str:
+    """t3 emits one JSON object per turn, not an event stream.
+
+    The substrate renderers read codex/claude/opencode shapes and find nothing
+    here, so a t3 capture would fall back to raw JSON -- the least readable of
+    the lot, and the one shape that IS trivially readable. Returns "" when no
+    line parses yet (a thread mid-write), letting the caller fall back.
+    """
+    blocks: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        out = [f"[HARNESS] t3 thread {ev.get('threadId') or '?'} — {ev.get('status') or '?'}"]
+        if ev.get("reply"):
+            out.append(f"[ASSISTANT] {ev['reply']}")
+        if ev.get("error"):
+            out.append(f"[ERROR] {ev['error']}")
+        blocks.append("\n".join(out))
+    return "\n\n".join(blocks)
+
+def render_capture(path: Path, harness: str) -> str:
+    """A captured harness stream, rendered into lines a person can read.
+
+    Every harness writes its own shape to `<harness>_session.jsonl` -- claude's
+    stream-json, opencode's `--format json`, pi's bare prose, t3's per-turn
+    object -- and the benchmark side already solves exactly this: the substrate
+    renderers turn each into one [ACTION]/[OBSERVATION] grammar. The panel
+    reuses them rather than inventing a second reading of the same files, which
+    is why a task's log here reads like the same task's trajectory there.
+
+    Raw is the fallback, not the default: a stream no renderer understands is
+    shown as captured, because prose from a `--print` harness is already what
+    the operator wants to read.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if not raw.strip():
+        return ""
+    if harness == "t3code":
+        return _render_t3code(raw) or raw[-LOG_MAX_CHARS:]
+    # Imported here, not at module scope: the panel must stay importable without
+    # the substrate package, and only reading a log needs a renderer.
+    if harness == "opencode":
+        from ..substrate.opencode import render_events  # noqa: PLC0415
+    else:
+        from ..substrate.codex import render_events  # noqa: PLC0415
+    rendered = render_events(path, obs_trunc=4000, max_chars=LOG_MAX_CHARS)
+    if not rendered.strip() or rendered.startswith(_NO_EVENTS):
+        return raw[-LOG_MAX_CHARS:]
+    return rendered
 
 @dataclass
 class Job:
@@ -206,17 +274,20 @@ class JobStore:
             return job.view() if job else None
 
     def log(self, job_id: str) -> str:
-        """The harness's captured stream, read fresh so it streams as it grows."""
+        """The harness's captured stream, rendered for a person, read fresh so it
+        streams as it grows. Falls back to the stderr log while the session file
+        is still empty -- a harness that dies at startup writes only that."""
         with self._lock:
             job = self._jobs.get(job_id)
         if job is None or job.run_dir is None:
             return ""
-        for name in (f"{job.harness}_session.jsonl", f"{job.harness}_stderr.log"):
-            path = job.run_dir / name
-            if path.is_file():
-                text = path.read_text(encoding="utf-8", errors="replace")
-                if text.strip():
-                    return text[-40_000:]
+        session = job.run_dir / f"{job.harness}_session.jsonl"
+        rendered = render_capture(session, job.harness)
+        if rendered.strip():
+            return rendered
+        stderr = job.run_dir / f"{job.harness}_stderr.log"
+        if stderr.is_file():
+            return stderr.read_text(encoding="utf-8", errors="replace")[-LOG_MAX_CHARS:]
         return ""
 
     # -- writing ---------------------------------------------------------

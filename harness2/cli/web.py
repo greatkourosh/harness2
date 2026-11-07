@@ -87,6 +87,9 @@ PAGE = """<!doctype html>
  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px;
    padding:11px; overflow:auto; max-height:calc(100vh - 300px); font-size:12px;
    white-space:pre-wrap; word-break:break-word }
+ /* The prompt is usually a few lines; the log below it should get the height.
+    Capped anyway so a pasted essay cannot push the log off screen. */
+ pre.prompt { max-height:30vh; color:var(--txt) }
  .kv { display:grid; grid-template-columns:120px 1fr; gap:3px 12px; margin:10px 0 14px }
  .kv dt { color:var(--dim) } .kv dd { margin:0; word-break:break-all }
  th { text-align:left; color:var(--dim); font-weight:500; padding:4px 10px 4px 0;
@@ -197,6 +200,8 @@ async function detail(id) {
   if (!j || j.error === 'not found') return;
   const files = (j.delivered||[]).map(f => `<li>${esc(f)}</li>`).join('');
   document.getElementById('detail').innerHTML = `
+   <h3 style="font-size:13px;margin-top:0">prompt</h3>
+   <pre class="prompt">${esc(j.task) || '—'}</pre>
    <dl class="kv">
      <dt>project</dt><dd>${esc(j.project)}</dd>
      <dt>workspace</dt><dd>${esc(j.workspace)}${j.cloned?' <span style="color:var(--dim)">(clone — the real tree is untouched)</span>':''}</dd>

@@ -22,7 +22,136 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harness2.benchmarks import external_runner
+from harness2.substrate.codex import render_events as render_codex_events
 from harness2.web import jobs
+
+_CLAUDE_JSONL = (
+    '{"type":"assistant","message":{"id":"m1","role":"assistant","content":'
+    '[{"type":"tool_use","id":"t1","name":"Write","input":'
+    '{"file_path":"/tmp/hello.txt","content":"hi\\n"}}]}}\n'
+)
+
+_CLAUDE_UNPARSED_JSONL = (
+    '{"type":"assistant","message":{"id":"m1","role":"assistant","content":'
+    '[{"type":"tool_use","id":"t1","name":"Bash","input":{"__unparsedToolInput":'
+    '{"len":18,"raw":"{\\"command\\":\\"ls -la\\"}{\\"command\\":\\"ls -la\\"}"}}}]}}\n'
+)
+
+_CLAUDE_ODD_ARGS_JSONL = (
+    '{"type":"assistant","message":{"id":"m1","role":"assistant","content":'
+    '[{"type":"tool_use","id":"t1","name":"Weird","input":{"k":"v"}}]}}\n'
+)
+
+# Trimmed to the fields the panel renders; the real captures carry more.
+_OPENCODE_JSONL = (
+    '{"type":"text","timestamp":1,"sessionID":"s","part":{"type":"text",'
+    '"text":"Back to real workspace."}}\n'
+    '{"type":"tool_use","timestamp":2,"sessionID":"s","part":{"type":"tool",'
+    '"tool":"bash","callID":"c1","state":{"status":"completed",'
+    '"input":{"command":"git status"},"output":"On branch main\\n"}}}\n'
+)
+
+_T3_JSONL = (
+    '{"threadId":"mcp:1","runId":"run:1","status":"completed",'
+    '"reply":"pong","error":null}\n'
+)
+
+
+class RenderCaptureTests(unittest.TestCase):
+    """The panel's log pane reads the same renderers the benchmark side does.
+
+    Raw JSONL was the default before this: a t3 or opencode capture is one long
+    JSON object per line, which is the least readable form of the most readable
+    information. These guard that each harness's shape comes out as prose, and
+    that anything unrecognised still shows as captured rather than as nothing.
+    """
+
+    def _render(self, raw: str, harness: str) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / f"{harness}_session.jsonl"
+            p.write_text(raw, encoding="utf-8")
+            return jobs.render_capture(p, harness)
+
+    def test_an_opencode_stream_renders_actions_not_json(self):
+        out = self._render(_OPENCODE_JSONL, "opencode")
+        self.assertIn("[ACTION] bash(git status)", out)
+        self.assertIn("[OBSERVATION] On branch main", out)
+        self.assertNotIn('{"type"', out)
+        # The tool's own metadata is bookkeeping, not the command.
+        self.assertNotIn("workdir", out)
+
+    def test_a_t3_per_turn_object_renders_its_reply(self):
+        out = self._render(_T3_JSONL, "t3code")
+        self.assertIn("[ASSISTANT] pong", out)
+        self.assertNotIn("threadId", out)
+
+    def test_a_t3_object_with_an_error_surfaces_it(self):
+        out = self._render(
+            '{"threadId":"t1","status":"failed","reply":null,"error":"boom"}', "t3code"
+        )
+        self.assertIn("[ERROR] boom", out)
+
+    def test_a_bare_prose_stream_is_shown_as_captured(self):
+        """pi's `--print` writes prose, not events; the raw text IS the log."""
+        out = self._render("Done. `output/answer.txt` contains PONG.\n", "pi")
+        self.assertIn("contains PONG", out)
+
+    def test_an_empty_capture_renders_as_empty(self):
+        self.assertEqual(self._render("", "claude-code"), "")
+        self.assertEqual(self._render("   \n", "claude-code"), "")
+
+    def test_a_missing_capture_renders_as_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(jobs.render_capture(Path(td) / "nope.jsonl", "pi"), "")
+
+    def test_the_stderr_log_is_the_fallback_while_the_session_is_empty(self):
+        """A harness that dies at startup writes only stderr; that must show."""
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            (run_dir / "pi_session.jsonl").write_text("", encoding="utf-8")
+            (run_dir / "pi_stderr.log").write_text("boom: no config", encoding="utf-8")
+            job = jobs.Job(
+                id="j1", task="t", project="p", project_path=Path(td), harness="pi",
+                model="", routed_by="", workspace=run_dir / "workspace", cloned=False,
+                state="failed", run_dir=run_dir,
+            )
+            store = jobs.JobStore(root=Path(td) / "runs")
+            store._jobs["j1"] = job
+            self.assertIn("boom: no config", store.log("j1"))
+
+
+class ClaudeActionLineTests(unittest.TestCase):
+    """A claude tool call must read as its command, not as a Python/JSON dump.
+
+    Measured live: the panel showed `[ACTION] Bash: {'command': 'ls -la'}` for a
+    successful call and a doubled escaped-JSON blob for one whose input failed to
+    parse, while the codex path one file over showed a plain `[ACTION] shell: ...`.
+    """
+
+    def _render(self, raw: str) -> str:
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "claude-code_session.jsonl"
+            p.write_text(raw, encoding="utf-8")
+            return render_codex_events(p, obs_trunc=500, max_chars=10 ** 6)
+
+    def test_a_parsed_tool_call_shows_its_command(self):
+        out = self._render(_CLAUDE_JSONL)
+        self.assertIn("[ACTION] Write: /tmp/hello.txt", out)
+        self.assertNotIn("'file_path'", out)
+        self.assertNotIn("{'", out)
+
+    def test_an_unparsed_tool_call_is_recovered_not_dumped(self):
+        """Raw is the args JSON doubled by the retry; raw_decode reads the first."""
+        out = self._render(_CLAUDE_UNPARSED_JSONL)
+        self.assertIn("[ACTION] Bash: ls -la", out)
+        self.assertNotIn("__unparsedToolInput", out)
+        self.assertNotIn("\\\"command\\\"", out)
+
+    def test_an_unknown_field_falls_back_to_compact_json(self):
+        """Not every tool has a liftable field; compact JSON still beats a repr."""
+        out = self._render(_CLAUDE_ODD_ARGS_JSONL)
+        self.assertIn('[ACTION] Weird: {"k": "v"}', out)
+        self.assertNotIn("{'k': 'v'}", out)
 
 
 class ProjectListingTests(unittest.TestCase):
