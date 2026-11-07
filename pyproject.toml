@@ -35,6 +35,7 @@ harness2-demo = "harness2.cli.demo:main"
 harness2-bridge = "harness2.cli.bridge:main"
 harness2-harness = "harness2.cli.harness:main"
 harness2-web = "harness2.cli.web:main"
+harness2-telegram = "harness2.cli.telegram:main"
 
 [tool.setuptools.packages.find]
 include = ["harness2*"]
