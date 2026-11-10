@@ -131,6 +131,7 @@ class Bot:
         self._choices: dict[int, list[dict]] = {}
         self._watch: dict[int, set[str]] = {}
         self._announced: dict[str, str] = {}
+        self._stalled_announced: set[str] = set()
 
     # -- access --------------------------------------------------------------
 
@@ -232,6 +233,15 @@ class Bot:
                     job_ids.discard(job_id)
                     continue
                 state = job.get("state")
+                if state == "running" and job.get("stalled") \
+                        and job_id not in self._stalled_announced:
+                    self._stalled_announced.add(job_id)
+                    self._send(
+                        chat_id,
+                        f"<b>{_short(job.get('project'), 40)}</b> — ⚠ no output for a while\n"
+                        + self._summary(job)
+                        + "\nIt may be stuck on the model/gateway: /cancel to stop, /logs to look.",
+                    )
                 if state not in SETTLED or self._announced.get(job_id) == state:
                     continue
                 job_ids.discard(job_id)

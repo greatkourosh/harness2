@@ -66,6 +66,12 @@ In Telegram: `/status` shows the panel URL, the proxy in use, and what is
 running. `/help` shows every command. Send any plain message — the bot asks
 which project, then runs it.
 
+Completion notifications come only once per task, when it settles. A task that
+goes quiet while still `running` produces one extra nudge: when the panel
+flags it `stalled` (no stream output for `jobs.STALL_AFTER`), the bot sends a
+warning with the `/cancel` and `/logs` commands in it, so a harness waiting on
+a dead model is stopped in seconds instead of after the run timeout.
+
 ## Commands
 
 | command | does |

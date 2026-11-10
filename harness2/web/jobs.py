@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import threading
 import time
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -49,6 +50,11 @@ PROJECTS_ROOT = Path("/media/kourosh/DEVNVME/projects")
 # How much of a rendered stream the panel keeps. The page shows one <pre>, and a
 # benchmark-sized rollout is far longer than anyone scrolls.
 LOG_MAX_CHARS = 40_000
+
+# Seconds of silence while a job claims `running` before the panel calls it
+# stalled. The honest signal for an agent is not progress -- nothing measures
+# its inner work -- but heartbeat: a healthy harness keeps writing its stream.
+STALL_AFTER = 180
 
 # What the substrate renderers return when they recognise no events. Kept as a
 # constant so the fallback below matches on a name, not on a copy of the string.
@@ -143,6 +149,21 @@ class Job:
     started: str = ""
     finished: str = ""
     run_dir: Path | None = None
+    # UTC timestamp of the last heartbeat: when the session log was last seen
+    # growing. A running job whose heartbeat is stale is stalled.
+    heartbeat: str = ""
+
+    def _stalled(self) -> bool:
+        """True when a running job has shown no stream output for STALL_AFTER."""
+        if self.state != "running" or not self.run_dir or not self.heartbeat:
+            return False
+        try:
+            session = self.run_dir / f"{self.harness}_session.jsonl"
+            if session.is_file():
+                return time.time() - session.stat().st_mtime > STALL_AFTER
+        except OSError:
+            pass
+        return False
 
     def view(self) -> dict:
         """A JSON-safe snapshot; the page never sees a Path or a lock."""
@@ -155,6 +176,7 @@ class Job:
             "model": self.model,
             "routed_by": self.routed_by,
             "state": self.state,
+            "stalled": self._stalled(),
             "exit_code": self.exit_code,
             "delivered": list(self.delivered),
             "answer": self.answer,
@@ -242,6 +264,9 @@ class JobStore:
             job.cancelled = bool(entry.get("cancelled"))
             job.started = str(entry.get("started") or "")
             job.finished = str(entry.get("finished") or "")
+            # A restarted job has no live heartbeat; it gets one when it runs
+            # again. Stalled reads simply see no heartbeat and report clean.
+            job.heartbeat = str(entry.get("heartbeat") or "")
             # A task cannot have been left running by a process that is gone.
             if job.state in ("running", "queued"):
                 job.state = "interrupted"
@@ -282,6 +307,20 @@ class JobStore:
         if job is None or job.run_dir is None:
             return ""
         session = job.run_dir / f"{job.harness}_session.jsonl"
+        # The stream is the heartbeat: a read that finds it still growing
+        # refreshes a running job's stall clock. Freshness, not presence -- a
+        # stalled harness keeps an old file, and that must stay old.
+        if job.state == "running":
+            try:
+                if session.is_file():
+                    last_mtime = session.stat().st_mtime
+                    if not hasattr(job, "_seen_mtime") or last_mtime != getattr(job, "_seen_mtime", None):
+                        job._seen_mtime = last_mtime
+                        job.heartbeat = datetime.now(timezone.utc).isoformat()
+                elif not job.heartbeat:
+                    job.heartbeat = datetime.now(timezone.utc).isoformat()
+            except OSError:
+                pass
         rendered = render_capture(session, job.harness)
         if rendered.strip():
             return rendered
@@ -463,6 +502,7 @@ class JobStore:
             job = self._jobs[job_id]
             job.state = "running"
             job.started = _now()
+            job.heartbeat = job.started
             self._save()
             harness = job.harness
             model = job.model

@@ -15,8 +15,10 @@
 """Regressions for the task panel: isolation, job lifecycle, project listing."""
 
 import json
+import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -118,6 +120,36 @@ class RenderCaptureTests(unittest.TestCase):
             store = jobs.JobStore(root=Path(td) / "runs")
             store._jobs["j1"] = job
             self.assertIn("boom: no config", store.log("j1"))
+
+    def test_a_running_job_with_no_new_stream_output_is_stalled(self):
+        """A harness that goes quiet must read as stalled, not silently running."""
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            session = run_dir / "pi_session.jsonl"
+            session.write_text("old", encoding="utf-8")
+            # An OLD mtime: no writes since long before STALL_AFTER.
+            old = time.time() - jobs.STALL_AFTER - 60
+            os.utime(session, (old, old))
+            job = jobs.Job(
+                id="j1", task="t", project="p", project_path=Path(td), harness="pi",
+                model="", routed_by="", workspace=run_dir / "workspace", cloned=False,
+                state="running", run_dir=run_dir, started="2026-11-10T00:00:00+00:00",
+                heartbeat="2026-11-10T00:00:00+00:00",
+            )
+            self.assertTrue(job.view()["stalled"])
+
+    def test_a_running_job_still_writing_is_not_stalled(self):
+        with tempfile.TemporaryDirectory() as td:
+            run_dir = Path(td)
+            session = run_dir / "pi_session.jsonl"
+            session.write_text("fresh", encoding="utf-8")
+            job = jobs.Job(
+                id="j2", task="t", project="p", project_path=Path(td), harness="pi",
+                model="", routed_by="", workspace=run_dir / "workspace", cloned=False,
+                state="running", run_dir=run_dir, started="2026-11-10T00:00:00+00:00",
+                heartbeat="2026-11-10T00:00:00+00:00",
+            )
+            self.assertFalse(job.view()["stalled"])
 
 
 class ClaudeActionLineTests(unittest.TestCase):

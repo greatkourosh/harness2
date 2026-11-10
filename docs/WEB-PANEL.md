@@ -192,6 +192,27 @@ A task does not have to write a file. `hey` is answered in prose, and that reply
 the panel shows it under the task, so a conversational prompt reads as finished
 work rather than as an empty run.
 
+### How "running" shows progress
+
+An agent's inner work is not measurable, so there is no fake percentage. What
+the panel shows instead is the honest signals:
+
+- **elapsed** — the time since the task started, in the detail pane, ticking
+  every second.
+- **heartbeat** — the stream is the heartbeat. Every job re-reads its
+  `<harness>_session.jsonl` as long as it is `running`; a fresh write refreshes
+  the stall clock.
+- **stalled** — a `running` job whose stream has had no new write for
+  `jobs.STALL_AFTER` (default 180 s) is flagged `stalled`, as a pill on the
+  row and a banner in the detail pane with a **Stop it** link. The web API
+  exposes it per task as `stalled`.
+
+The point is to catch a silent hang early. A harness that is waiting on the
+model/gateway — the model id never answering — writes nothing, reads as
+`stalled`, and can be stopped in seconds instead of watching an hour of
+"running" with no output, which is what exit-124 timeouts look like from the
+outside.
+
 ### Continuing a task
 
 Each task normally starts cold: a fresh workspace and no memory of any earlier
@@ -257,8 +278,8 @@ curl -s -X POST http://127.0.0.1:8090/api/tasks \
 
 `harness` and `model` are optional; leaving `harness` empty routes by the task
 text exactly as `harness2-harness do` does. The response is the new task's own
-view, including the `state` field described above and the `answer` once it
-settles.
+view, including the `state` field described above, the `stalled` flag while it
+is `running`, and the `answer` once it settles.
 
 `continue_from` names an earlier task to continue; with it, `project` is optional
 and ignored (both it and the harness come from that task):

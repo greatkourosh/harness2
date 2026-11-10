@@ -84,6 +84,9 @@ PAGE = """<!doctype html>
     do not know how it ended. */
  .s-interrupted { color:var(--run); border-color:var(--run) }
  .s-failed { color:var(--bad); border-color:var(--bad) }
+ .s-stalled { color:var(--bad); border-color:var(--bad); background:rgba(220,50,50,.08) }
+ .stall-note { padding:8px 10px; margin:0 0 10px; border:1px dashed var(--bad);
+   color:var(--bad); border-radius:6px; font-size:12px }
  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px;
    padding:11px; overflow:auto; max-height:calc(100vh - 300px); font-size:12px;
    white-space:pre-wrap; word-break:break-word }
@@ -153,6 +156,7 @@ async function poll() {
       <div class="top">
         <span class="proj">${esc(j.project)}</span>
         <span class="pill s-${j.state}">${j.state === 'no_files' ? 'no files' : j.state}</span>
+        ${j.stalled ? '<span class="pill s-stalled" title="no output for a while">stalled</span>' : ''}
       </div>
       <div class="task">${esc(j.task)}</div>
       <div class="meta">${esc(j.harness)} · ${esc(j.model||'—')}${j.cloned?' · clone':''}</div>
@@ -208,12 +212,14 @@ async function detail(id) {
      <dt>harness</dt><dd>${esc(j.harness)}</dd>
      <dt>model</dt><dd>${esc(j.model||'—')}</dd>
      <dt>routed by</dt><dd>${esc(j.routed_by)}</dd>
-     <dt>state</dt><dd><span class="pill s-${j.state}">${j.state === 'no_files' ? 'no output' : j.state}</span>${j.exit_code!=null?' exit '+j.exit_code:''}</dd>
+     <dt>state</dt><dd><span class="pill s-${j.state}">${j.state === 'no_files' ? 'no output' : j.state}</span>${j.exit_code!=null?' exit '+j.exit_code:''}${j.stalled?' <span class="pill s-stalled">stalled</span>':''}</dd>
+     <dt>elapsed</dt><dd><span id="elapsed" data-started="${esc(j.started||'')}">${j.started?fancyElapsed(started(j.started)):'—'}</span></dd>
      <dt>started</dt><dd>${esc(j.started||'—')}</dd>
      <dt>finished</dt><dd>${esc(j.finished||'—')}</dd>
      ${j.error?`<dt>error</dt><dd style="color:var(--bad)">${esc(j.error)}</dd>`:''}
      ${j.run_dir?`<dt>run dir</dt><dd>${esc(j.run_dir)}</dd>`:''}
    </dl>
+   ${j.stalled?`<div class="stall-note">No output from the harness for a while — it may be waiting on the model/gateway. <a href="#" onclick="act('${j.id}','cancel');return false">Stop it</a>.</div>`:''}
    ${(j.state==='running'||j.state==='queued')?
      `<button class="ghost" onclick="act('${j.id}','cancel')">Cancel (stops the harness)</button>`:
      `<button class="ghost" onclick="act('${j.id}','forget')">Remove from list</button>`}
@@ -226,6 +232,20 @@ async function detail(id) {
    <pre>${esc(log || '—')}</pre>`;
 }
 
+function started(iso) { const t = new Date(iso); return isNaN(t) ? null : t; }
+function fancyElapsed(s) {
+  if (!s) return '—';
+  let sec = Math.max(0, Date.now() - s.getTime()) / 1000;
+  if (sec < 120) return Math.floor(sec) + 's';
+  const m = Math.floor(sec / 60);
+  if (m < 60) return m + 'm ' + Math.floor(sec % 60) + 's';
+  const h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+setInterval(() => {
+  const el = document.getElementById('elapsed');
+  if (el) { const s = started(el.dataset.started); el.textContent = s ? fancyElapsed(s) : '—'; }
+}, 1000);
 boot();
 </script></body></html>
 """
