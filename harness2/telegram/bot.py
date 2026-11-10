@@ -161,24 +161,36 @@ class Bot:
                 self.tg.call("sendMessage", **params)
             except (TelegramError, OSError) as exc:
                 # A refusal is usually bad HTML, which would drop the whole
-                # message. Retrying as plain text loses the <pre> blocks but
-                # still says the thing.
+                # message. Retrying as plain text loses the <pre> blocks and the
+                # buttons but still says the thing. The markup goes too: if the
+                # first attempt was refused, chances are the markup was the
+                # problem, and re-sending bytes of it only fails again.
                 self.log(f"sendMessage failed ({exc}); retrying unformatted")
                 params["text"] = html.unescape(_strip_tags(chunk))
                 params.pop("parse_mode", None)
+                params.pop("reply_markup", None)
                 try:
                     self.tg.call("sendMessage", **params)
                 except (TelegramError, OSError) as again:
                     self.log(f"could not send to {chat_id}: {again}")
                     return
 
-    def _buttons(self, chat_id: int, text: str, rows: list[list[tuple[str, str]]]) -> None:
-        keyboard = {
+    @staticmethod
+    def _inline(rows: list[list[tuple[str, str]]]) -> dict:
+        """Rows of (label, data) tuples -> the reply_markup Telegram accepts.
+
+        Every button must be an object in the JSON body; a tuple serializes as
+        an array and Telegram refuses it ("InlineKeyboardButton must be an
+        Object"). collect this one place so a keyboard is never built by hand.
+        """
+        return {
             "inline_keyboard": [
                 [{"text": label, "callback_data": data} for label, data in row] for row in rows
             ]
         }
-        self._send(chat_id, text, keyboard)
+
+    def _buttons(self, chat_id: int, text: str, rows: list[list[tuple[str, str]]]) -> None:
+        self._send(chat_id, text, self._inline(rows))
 
     # -- loop ----------------------------------------------------------------
 
@@ -462,7 +474,7 @@ class Bot:
                 f"    {html.escape(_short(job.get('task'), 70))}"
             )
             rows.append([(f"{icon} {_short(job.get('task'), 30)}", f"t:{job['id']}")])
-        self._send(chat_id, "<b>Recent tasks</b>\n" + "\n".join(lines), {"inline_keyboard": rows})
+        self._send(chat_id, "<b>Recent tasks</b>\n" + "\n".join(lines), self._inline(rows))
 
     def _cmd_task(self, chat_id: int, arg: str) -> None:
         job_id = arg.split()[0] if arg else ""
@@ -529,7 +541,7 @@ class Bot:
             return self._send(chat_id, "Nothing to pick.")
         label, verb = {"cancel": ("Cancel", "c"), "forget": ("Forget", "f"), "continue": ("Continue", "k")}[what]
         rows = [[(_short(t.get("task"), 40), f"{verb}:{t['id']}")] for t in live[:10]]
-        self._send(chat_id, f"{label} which?", {"inline_keyboard": rows})
+        self._send(chat_id, f"{label} which?", self._inline(rows))
 
     def _task_buttons(self, job: dict) -> dict:
         job_id = job["id"]

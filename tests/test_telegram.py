@@ -23,7 +23,7 @@ import unittest
 
 from harness2.telegram.bot import Bot, HELP
 from harness2.telegram.panel import Panel, PanelError
-from harness2.telegram.transport import Telegram, parse_proxy
+from harness2.telegram.transport import Telegram, TelegramError, parse_proxy
 
 CHAT = 4242
 
@@ -280,6 +280,66 @@ class NotifyTests(unittest.TestCase):
         bot._watch[CHAT] = {"gone"}
         bot._notify()
         self.assertEqual(bot._watch[CHAT], set())
+
+
+class KeyboardTests(unittest.TestCase):
+    def test_inline_buttons_are_objects_in_the_json_body(self):
+        """Tuples serialize as arrays; Telegram rejects those with
+        'InlineKeyboardButton must be an Object'. The conversion has to be part
+        of how every keyboard is built, not left to the call site."""
+        bot, _ = make_bot()
+        keyboard = bot._inline([[("start", "run:0")], [("open", "t:1"), ("stop", "c:1")]])
+        self.assertEqual(
+            keyboard,
+            {"inline_keyboard": [
+                [{"text": "start", "callback_data": "run:0"}],
+                [{"text": "open", "callback_data": "t:1"},
+                 {"text": "stop", "callback_data": "c:1"}],
+            ]},
+        )
+
+    def test_tasks_reply_carries_a_valid_keyboard(self):
+        """/tasks is the command the operator types first; its keyboard must not
+        crash the send. A refusal on a bad keyboard kills the whole message."""
+        panel = FakePanel()
+        panel.tasks_list = [{"id": "abc123", "state": "done", "project": "alpha",
+                             "task": "build the thing"}]
+        bot, tg = make_bot(panel=panel)
+        bot._dispatch(message("/tasks"))
+        sent = [p for m, p in tg.calls if m == "sendMessage"]
+        self.assertTrue(sent)
+        markup = sent[0].get("reply_markup", {})
+        buttons = markup.get("inline_keyboard", [])
+        self.assertTrue(buttons, "expected an inline keyboard on /tasks reply")
+        self.assertTrue(all(isinstance(b, dict) for row in buttons for b in row))
+
+    def test_unformatted_retry_drops_the_keyboard(self):
+        """If the first attempt is refused (bad markup, say), the plain-text
+        retry must not replay the keyboard: it can only fail again."""
+        bot, tg = make_bot()
+        # 8 projects -> pagination isn't hit, but the point is a keyboard is set.
+        bot._pending[CHAT] = {"task": "t", "harness": ""}
+        bot._ask_project(CHAT)
+        tg.calls.clear()
+        # Simulate a refusal on the first send.
+        def failing(method, **params):
+            if method == "sendMessage" and "parse_mode" in params:
+                raise TelegramError("Bad Request: can't parse")
+            return {}
+        bot.tg = failing_proxy(tg)
+        bot._send(CHAT, "<b>x</b>", bot._inline([[("go", "run:0")]]))
+        retry = [p for m, p in tg.calls if m == "sendMessage"][-1]
+        self.assertNotIn("reply_markup", retry)
+        self.assertNotIn("parse_mode", retry)
+
+
+def failing_proxy(tg):
+    class _Fake:
+        def call(self, method, **params):
+            if method == "sendMessage" and "parse_mode" in params:
+                raise TelegramError("Bad Request: can't parse")
+            return tg.call(method, **params)
+    return _Fake()
 
 
 class MenuTests(unittest.TestCase):
