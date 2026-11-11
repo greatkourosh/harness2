@@ -118,13 +118,22 @@ The bot answers only the chat it is told to answer:
 `HARNESS2_TELEGRAM_CHAT_ID`, comma-separated ids accepted. A bot is reachable by
 whoever learns its username, and every task it starts runs an agent with write
 access to a project directory — a clone for a git project, the directory itself
-otherwise — so the closed default (a bare-bones `/whoami` only) is deliberate.
-An unaudited chat is refused with its own id and the remediation line, so
-adding the operator's chat is a copy-paste.
+otherwise — so the closed default is deliberate: with no value set, the bot
+answers nothing and logs `no HARNESS2_TELEGRAM_CHAT_ID set`. An unaudited chat
+is refused on every message, and the refusal carries that chat's id plus the
+exact env line to set, so onboarding is a copy-paste.
 
 The panel behind it has **no authentication** and binds to loopback; the bot
 does not relax that. The bot is a front end for the local panel, not a
 tunnel into the network.
+
+As with the panel, there is no build step — the bot imports `harness2`
+straight from the repo — so an edit to `harness2/telegram/*.py` lands on disk
+but the running process keeps the old code until
+
+```bash
+systemctl --user restart harness2-telegram.service
+```
 
 ## The proxy code
 
