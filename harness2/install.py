@@ -67,7 +67,7 @@ def run(cmd, *, cwd=None, dry_run=False):
 
 
 def clone(name: str, *, dry_run=False):
-    repo = config.DEPENDENCIES / name
+    repo = config.OPENCODE_DIR if name == "opencode" else config.DEPENDENCIES / name
     pin = config.DEPENDENCY_PINS[name]
     if (repo / ".git").exists():
         revision = subprocess.run(
@@ -104,7 +104,7 @@ def clone(name: str, *, dry_run=False):
 
 
 def patch(name: str, *, dry_run=False):
-    repo = config.DEPENDENCIES / name
+    repo = config.OPENCODE_DIR if name == "opencode" else config.DEPENDENCIES / name
     source = config.THIRD_PARTY / "patches" / PATCHES[name]
     if dry_run:
         run(["git", "-C", repo, "apply", "--check", source], dry_run=True)

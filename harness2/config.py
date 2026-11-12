@@ -137,7 +137,8 @@ def lab_repo() -> Path:
     return DEPENDENCIES / "harvey-labs"
 
 
-OPENCODE_DIR = DEPENDENCIES / "opencode"
+# Allow overriding opencode location via OPENCODE_DIR env var
+OPENCODE_DIR = Path(os.getenv("OPENCODE_DIR", "/media/kourosh/DEVNVME/tools/opencode"))
 BUN = DEPENDENCIES / "tools" / "node_modules" / ".bin" / "bun"
 LAB_PYTHON = lab_repo() / ".venv" / "bin" / "python"
 # 9router speaks the Anthropic Messages API, so the LAB judge (Anthropic SDK)
