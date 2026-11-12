@@ -17,16 +17,30 @@ adapter = "claude-code"
 key_name = "claude_code_cli"
 
 binary = "claude"
-# `--permission-mode auto` is required headlessly, NOT `acceptEdits`. Measured:
-# under acceptEdits the agent is denied every command outside a small safe-command
-# allowlist -- `echo` passes, `python3 -c`, `unzip -l`, `pandoc` and `awk` do not
-# (0 allowed / 1 denied on a three-command probe; auto: 3/3). LAB cannot work that
-# way, because reading a binary document IS `python3 scripts/read_doc.py <path>`.
-# A real rollout spent its whole 5400s wall on 322 such denials and delivered only
-# a scratch file. `auto` lets Bash run while still classifying each command, and
-# unlike `bypassPermissions` it keeps the classifier in the loop; the workspace is
-# a per-run scratch dir, which is the posture the codex cell already takes
+# `--permission-mode auto` was the default here, but in auto mode every Bash
+# command goes through claude-code's safety classifier, which is itself a model
+# call (the `claude-haiku-4-5` alias). Through the 9router gateway that call
+# runs on the same slow combos and, when the first upstream times out, the
+# session reports `Bash ... (timed out): cannot determine the safety`, then
+# auto-rejects the command. A panel task that needed Bash spent its whole hour
+# retrying and was killed by the timeout with zero output. `bypassPermissions`
+# removes the classifier from the critical path entirely; the workspace is a
+# per-run scratch clone, which is the same posture the codex cell already takes
 # (it runs `codex exec --dangerously-bypass-approvals-and-sandbox`).
+#
+# `acceptEdits` was measured and rejected: the agent is denied every command
+# outside a small safe-command allowlist -- `echo` passes, `python3 -c`,
+# `unzip -l`, `pandoc` and `awk` do not (0 allowed / 1 denied on a three-command
+# probe; auto: 3/3). LAB cannot work that way, because reading a binary document
+# IS `python3 scripts/read_doc.py <path>`. A real rollout spent its whole 5400s
+# wall on 322 such denials and delivered only a scratch file. `acceptEdits` also
+# keeps the classifier on the critical path, so it has the same hung-classifier
+# failure mode as `auto`; bypass is the only mode that avoids the classifier.
+#
+# The default model is `ollama-local/qwen3:1.7b-nothink`: a resident local model
+# that answers in seconds (vs. the `claude-sonnet-4-6` combo's 60s cold first
+# hop and repeated timeouts through 9router). Panel workspace is a scratch clone,
+# and the panel is the primary consumer here.
 #
 # `--output-format stream-json` (which requires `--verbose` under --print) turns
 # the prose into one JSON event per line, so the capture stream carries structure
@@ -37,7 +51,7 @@ binary = "claude"
 # than the terminal.
 headless = [
   "-p", "{prompt}",
-  "--permission-mode", "auto",
+  "--permission-mode", "bypassPermissions",
   "--output-format", "stream-json",
   "--verbose",
 ]
@@ -48,11 +62,37 @@ continue_flag = "--continue"
 trace_glob = "~/.claude/projects/**/*.jsonl"
 skills_dir = "~/.claude/skills"
 
-# Group assignment: claude code gets the frontier Claude group.
-allowed_models = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"]
+# Model group: the fast local routes first (they answer in seconds through the
+# gateway); the frontier Claude combos stay listed for an explicit `--model`
+# override once a working route is up. The default is a resident local model
+# because every remote combo observed here times out on its cold first hop
+# (60s+) and only recovers after several retries, which is what hung the panel.
+allowed_models = [
+  "ollama-local/qwen3:1.7b-nothink",
+  "ollama-local/qwen3:8b-ctx32k",
+  "claude-sonnet-4-6",
+  "claude-opus-4-6",
+  "claude-haiku-4-5",
+]
 
 # Routing: the default, and the one for heavy written deliverables.
 routes = ["memo", "report", "legal", "contract", "analysis", "summarize", "docx"]
-default_model = "claude-sonnet-4-6"
+default_model = "ollama-local/qwen3:1.7b-nothink"
 priority = 20
 default = true
+
+# Live evidence for a panel run: the environment variables the run inherits from
+# the caller. A headless claude run still opens the operator's `~/.claude/settings.json`,
+# where the `haiku` alias is bound to a slow gateway combo. These are applied after
+# the adapter drops the ambient aliases (see `ExternalCliSubstrate.exec_env`), so
+# they override that file for the run only and never touch the operator's file.
+# The alias binding matters because `--permission-mode auto` sends its Bash safety
+# classifier through the `haiku` alias, not through `--model`; on a slow combo that
+# call times out and every Bash command is auto-rejected, which is what makes a
+# task's "output very long" while never doing work. Bypass no longer needs the
+# classifier, but the aliases must still resolve fast or the agent's own call
+# hangs on the same slow first hop.
+[env]
+ANTHROPIC_DEFAULT_HAIKU_MODEL = "ollama-local/qwen3:1.7b-nothink"
+ANTHROPIC_DEFAULT_SONNET_MODEL = "ollama-local/qwen3:1.7b-nothink"
+ANTHROPIC_DEFAULT_OPUS_MODEL = "ollama-local/qwen3:8b-ctx32k"

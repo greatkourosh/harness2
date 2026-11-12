@@ -82,7 +82,7 @@ the user's own file, often carrying settings this package knows nothing about.
 | `pi` | `~/.pi/agent/models.json` | `pi --print` | routing combos |
 | `opencode` | `~/.config/opencode/opencode.json` | `opencode run … --format json` | Claude |
 | `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
-| `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
+| `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode bypassPermissions --output-format stream-json --verbose` | fast local (`ollama-local/*`) |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
 | `t3code` | `/media/kourosh/DEVNVME/docker/t3code-001/data` | `claude-sonnet-4-6` (pinned) | *(chosen in T3 Code)* |
 
@@ -331,7 +331,7 @@ its result, so `do` reports an answered run as the success it is and prints the
 answer:
 
 ```
-→ claude-code  (model claude-sonnet-4-6)
+→ claude-code  (model ollama-local/qwen3:1.7b-nothink)
   ok — answered (no file written)
   answer:
     The parser drops the trailing token because …
@@ -477,16 +477,22 @@ Two things worth knowing about this path:
   a bench run reported `turn_count: 1, input_tokens: 30952, output_tokens: 1`
   matching its raw `result` event, where before the fix `turn_count` was null
   (the totals only looked right by luck, because the assistant events are zero).
-- **Headless delivery needs a permission mode that lets Bash run, and
-  `acceptEdits` is not one.** With a prompting mode `claude -p` holds every
-  unlisted action for approval, has nobody to ask, and the agent burns its whole
-  wall retrying: one measured rollout spent 5400s on 322 denials and delivered a
-  scratch file. `acceptEdits` auto-approves only edits and a small safe-command
-  allowlist — `echo` passes, `python3 -c`, `unzip -l`, `pandoc` and `awk` do not
-  (0 allowed / 1 denied on a straight probe). LAB cannot work under that, because
-  reading a binary document *is* `python3 scripts/read_doc.py <path>`. The
-  manifest therefore carries `--permission-mode auto` (3/3 on the same probe),
-  which lets Bash run while keeping the classifier in the loop; the alternative
-  `bypassPermissions` is what the codex cell effectively does already
-  (`--dangerously-bypass-approvals-and-sandbox`). The workspace is a per-run
-  scratch directory either way.
+- **Headless delivery needs a permission mode that lets Bash run, and neither
+  `acceptEdits` nor `auto` works through a slow gateway.** With a prompting mode
+  `claude -p` holds every unlisted action for approval, has nobody to ask, and
+  the agent burns its whole wall retrying: one measured rollout spent 5400s on
+  322 denials and delivered a scratch file. `acceptEdits` auto-approves only
+  edits and a small safe-command allowlist — `echo` passes, `python3 -c`,
+  `unzip -l`, `pandoc` and `awk` do not (0 allowed / 1 denied on a straight
+  probe), and LAB cannot work under that because reading a binary document *is*
+  `python3 scripts/read_doc.py <path>` (auto: 3/3 on the same probe, so it is
+  strictly better on the allowlist). But `auto` — unlike `bypassPermissions` —
+  runs every command through claude-code's safety classifier, a model call that
+  goes to the `ANTHROPIC_DEFAULT_HAIKU_MODEL` alias, *not* the `--model` in
+  play. When that route is slow or its first upstream times out, the session
+  reports `Bash … (timed out): cannot determine the safety`, auto-rejects the
+  command, and the task fills its whole run timeout retrying with zero output.
+  The manifest therefore carries `--permission-mode bypassPermissions` — no
+  classifier call on the critical path — which is the posture the codex cell
+  already takes (`--dangerously-bypass-approvals-and-sandbox`). The workspace is
+  a per-run scratch directory either way.
