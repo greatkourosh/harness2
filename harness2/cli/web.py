@@ -223,7 +223,7 @@ async function detail(id) {
    ${(j.state==='running'||j.state==='queued')?
      `<button class="ghost" onclick="act('${j.id}','cancel')">Cancel (stops the harness)</button>`:
      `<button class="ghost" onclick="act('${j.id}','forget')">Remove from list</button>`}
-   ${(j.state==='done'||j.state==='no_files')?
+   ${(j.state==='done'||j.state==='no_files'||j.state==='failed')?
      `<button class="ghost" onclick="startContinue('${j.id}')">Continue this task</button>`:''}
    ${j.continues?`<div class="meta" style="color:var(--dim)">continues task ${esc(j.continues)} (same workspace)</div>`:''}
    ${j.answer?`<h3 style="font-size:13px">answer</h3><pre style="white-space:pre-wrap">${esc(j.answer)}</pre>`:''}
