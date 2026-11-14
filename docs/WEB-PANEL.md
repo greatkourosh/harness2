@@ -216,7 +216,8 @@ outside.
 ### Continuing a task
 
 Each task normally starts cold: a fresh workspace and no memory of any earlier
-task. **Continue this task** on a finished task changes that for one follow-up.
+task. **Continue this task** on a finished task — done, no output, or failed —
+changes that for one follow-up.
 The new task runs in *the same workspace the earlier one worked in* — its files
 are still there — and the harness resumes the conversation it left, so "now do
 step 2" works on the plan you just wrote.
