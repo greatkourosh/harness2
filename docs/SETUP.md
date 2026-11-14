@@ -41,6 +41,12 @@ Pandoc and Poppler are needed by LAB. Also install:
 Benchmark setup installs its own pinned Bun runtime under `dependencies/`.
 Keep the main Harness² environment active when running the commands below.
 
+The upstream OpenCode checkout lives in `/media/kourosh/DEVNVME/tools/opencode`,
+not under `dependencies/` — override it with the `OPENCODE_DIR` environment
+variable (see `harness2/config.py`). The benchmark checkouts
+(`harvey-labs`, `job-bench-eval`, `workbuddy-bench`) and `opencode-config`
+remain under `dependencies/`.
+
 ## Models and credentials
 
 Copy `.env.example` to `.env` if you have not already done so. Set your Vertex AI
