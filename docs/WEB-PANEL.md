@@ -216,10 +216,14 @@ outside.
 ### Continuing a task
 
 Each task normally starts cold: a fresh workspace and no memory of any earlier
-task. **Continue this task** on a finished task changes that for one follow-up.
-The new task runs in *the same workspace the earlier one worked in* — its files
-are still there — and the harness resumes the conversation it left, so "now do
-step 2" works on the plan you just wrote.
+task. **Continue this task** changes that for one follow-up — and not only on
+finished tasks. It is offered on any task that is not currently running
+(`done`, `no output`, `failed`, and `interrupted` alike): the new task runs in
+*the same workspace the earlier one worked in* — its files are still there —
+and the harness resumes the conversation it left, so "now do step 2" works on
+the plan you just wrote. That makes a task that died mid-flight (exit-124
+timeout, a cancelled run) resumable from where it stopped, including the
+workspace and session files it left behind.
 
 Continuing inherits the project and the harness: a different project has a
 different tree, and a different harness has no conversation to resume. Clicking
