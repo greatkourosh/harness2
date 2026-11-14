@@ -62,6 +62,11 @@ namespaced (`bai/glm-5.3`, `Yeta/deepseek-v4.1-flash`), so a family pattern must
 be `*glm*`, not `glm*` — the anchored form matches nothing and leaves the harness
 with an empty group, which reads as a provider failure rather than a glob one.
 
+A manifest whose `allowed_models` starts with a glob must also name a concrete
+`default_model`: with no default, a run sends `allowed_models[0]` as a model id,
+and `gemini*` is a 404, not a model. `claude-desktop` hit exactly that — its
+group leads with `gemini*` — and now names `claude-sonnet-4-6`.
+
 A group must also name every model that harness should be able to run, because
 `apply` REWRITES the harness's own model list from it verbatim: a model missing
 from the group is removed by the next `apply`, even when it works. dsh shows both
