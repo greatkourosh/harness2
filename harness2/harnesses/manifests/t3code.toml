@@ -18,7 +18,7 @@
 
 id = "t3code"
 label = "T3 Code (pingdotgg, containerized)"
-config_path = "/media/kourosh/DEVNVME/docker/t3code-001/data"
+config_path = "/media/kourosh/DEVNVME/tools/t3code-001/data"
 config_format = "t3-home"
 adapter = "t3code"
 key_name = "t3code"
@@ -45,7 +45,7 @@ headless = [
 # Empty, so a caller-supplied model is dropped rather than appended as a second
 # --model beside the pinned pair. Change the pin in `headless` above instead.
 model_flag = ""
-trace_glob = "/media/kourosh/DEVNVME/docker/t3code-001/data/userdata/logs/*.ndjson"
+trace_glob = "/media/kourosh/DEVNVME/tools/t3code-001/data/userdata/logs/*.ndjson"
 
 # t3 only DRIVES agents — it never ships one — so claude-code is baked into the
 # image (Dockerfile, pinned 2.1.318) and spends the gateway through the

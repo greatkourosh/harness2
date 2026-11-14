@@ -84,7 +84,7 @@ the user's own file, often carrying settings this package knows nothing about.
 | `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
 | `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
-| `t3code` | `/media/kourosh/DEVNVME/docker/t3code-001/data` | `claude-sonnet-4-6` (pinned) | *(chosen in T3 Code)* |
+| `t3code` | `/media/kourosh/DEVNVME/tools/t3code-001/data` | `claude-sonnet-4-6` (pinned) | *(chosen in T3 Code)* |
 
 `claude-desktop` is inventory-only: the Electron app has no flag that takes a
 prompt and prints an answer. Its Code sessions run through the `claude` CLI, so
@@ -106,7 +106,7 @@ out in three ways, all verified by running it:
   explicitly empty) so its claude provider spends the gateway. `show` reports
   `configured (none)` for the same reason.
 - **It is containerized.** t3 runs from its own container at
-  `/media/kourosh/DEVNVME/docker/t3code-001/`, image
+  `/media/kourosh/DEVNVME/tools/t3code-001/`, image
   `192.168.1.13:7001/t3code:0.1.7`. `docker exec` is the only way in: the CLI
   finds its server through `<home>/userdata/server-runtime.json` and has no
   `--url`, so a host `t3` cannot reach a containerized server over the network.
@@ -192,8 +192,8 @@ ln -sf ~/.nvm/versions/node/<ver>/bin/claude ~/.local/bin/claude
 
 # pi and dsh ship an executable file with a `#!/usr/bin/env node` shebang,
 # so a symlink is enough.
-ln -sf ~/projects/pi_harness/packages/coding-agent/dist/bundle/cli.js ~/.local/bin/pi
-ln -sf ~/projects/deepseek_harness/apps/cli/lib/bin.js           ~/.local/bin/dsh
+ln -sf ~/tools/pi_harness/packages/coding-agent/dist/bundle/cli.js ~/.local/bin/pi
+ln -sf ~/tools/deepseek_harness/apps/cli/lib/bin.js           ~/.local/bin/dsh
 
 # opencode needs a wrapper, not a symlink: the pinned checkout has no built
 # dist, and its `bin/opencode` is CommonJS inside an ESM package, which fails
