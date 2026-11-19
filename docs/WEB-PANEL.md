@@ -234,6 +234,12 @@ land somewhere else. It is offered only for harnesses whose manifest declares a
 `continue_flag` (claude, pi, and opencode do; dsh's headless profile does not).
 The detail view marks a continued task with the task it continues.
 
+A continue also inherits the parent's **model**, not just project and harness.
+The parent may have run a provider-qualified id (`9router/claude-haiku-4-5`)
+where the manifest default is a group name: pi's `default_model` is `All`, and
+sent bare to 9router that fails as "ambiguous across providers" before the run
+starts. So the follow-up reuses the parent's exact id unless one is passed.
+
 A continuation is a chain, not a thread the panel remembers: each task has its
 own entry, and the harness's memory of the conversation lives in the workspace,
 not in the panel. The list itself is persisted to `runs/web/index.json`, so a
