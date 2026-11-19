@@ -216,10 +216,14 @@ outside.
 ### Continuing a task
 
 Each task normally starts cold: a fresh workspace and no memory of any earlier
-task. **Continue this task** on a finished task changes that for one follow-up.
-The new task runs in *the same workspace the earlier one worked in* — its files
-are still there — and the harness resumes the conversation it left, so "now do
-step 2" works on the plan you just wrote.
+task. **Continue this task** changes that for one follow-up — and not only on
+finished tasks. It is offered on any task that is not currently running
+(`done`, `no output`, `failed`, and `interrupted` alike): the new task runs in
+*the same workspace the earlier one worked in* — its files are still there —
+and the harness resumes the conversation it left, so "now do step 2" works on
+the plan you just wrote. That makes a task that died mid-flight (exit-124
+timeout, a cancelled run) resumable from where it stopped, including the
+workspace and session files it left behind.
 
 Continuing inherits the project and the harness: a different project has a
 different tree, and a different harness has no conversation to resume. Clicking
@@ -229,6 +233,12 @@ the dropdowns on whatever was picked last made the follow-up look as if it would
 land somewhere else. It is offered only for harnesses whose manifest declares a
 `continue_flag` (claude, pi, and opencode do; dsh's headless profile does not).
 The detail view marks a continued task with the task it continues.
+
+A continue also inherits the parent's **model**, not just project and harness.
+The parent may have run a provider-qualified id (`9router/claude-haiku-4-5`)
+where the manifest default is a group name: pi's `default_model` is `All`, and
+sent bare to 9router that fails as "ambiguous across providers" before the run
+starts. So the follow-up reuses the parent's exact id unless one is passed.
 
 A continuation is a chain, not a thread the panel remembers: each task has its
 own entry, and the harness's memory of the conversation lives in the workspace,

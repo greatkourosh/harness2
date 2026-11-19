@@ -26,3 +26,6 @@ can_run = false
 
 # Group assignment: the Gemini group, so the two Claude surfaces do not collide.
 allowed_models = ["gemini*", "claude-sonnet-4-6"]
+# A concrete id, not the `gemini*` group: `_resolve_model` sends the first
+# allowed entry as a model name when no default is set, and a glob 404s.
+default_model = "claude-sonnet-4-6"

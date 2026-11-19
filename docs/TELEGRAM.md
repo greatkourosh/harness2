@@ -83,7 +83,7 @@ a dead model is stopped in seconds instead of after the run timeout.
 | `/answer <id>` | just what the agent said |
 | `/cancel <id>` | stop a running task |
 | `/forget <id>` | drop a finished task from the list |
-| `/continue <id>` | same workspace, conversation resumed — the faithful message takes over |
+| `/continue <id>` | same workspace, conversation resumed — works on any task that is not running (done, failed, and interrupted) |
 | `/projects` | the directories a task can target, `·git` marking repositories |
 | `/harnesses` | the agents available, and which is default |
 | `/status` | panel URL, proxy in use, running tasks |

@@ -391,7 +391,10 @@ class JobStore:
             project=project,
             project_path=project_path,
             harness=decision.spec.id,
-            model=model or self._model_for(decision.spec),
+            # A continue keeps the parent's exact model: the parent may run a
+            # provider-qualified id the manifest default would overwrite (pi's
+            # `All` is a group, sent bare it 404s as "ambiguous").
+            model=model or (parent.model if parent else "") or self._model_for(decision.spec),
             routed_by=decision.reason,
             workspace=workspace,
             cloned=cloned,

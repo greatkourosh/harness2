@@ -608,6 +608,39 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(child["project"], parent["project"])
         self.assertEqual(child["harness"], parent["harness"])
 
+    def test_continue_inherits_the_parents_model(self):
+        """A continue keeps the parent's model id, not the manifest default.
+
+        pi's `default_model` is the group `All` -- sent bare to 9router it fails
+        as "ambiguous". A parent run with a provider-qualified id must thread
+        that id into the follow-up, or the resume 404s before it starts.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "proj").mkdir(exist_ok=True)
+
+        def success(**kw):
+            run_dir = Path(kw["results_root"]) / kw["run_id"]
+            (run_dir / "workspace" / "output").mkdir(parents=True, exist_ok=True)
+            (run_dir / "metrics.json").write_text(
+                json.dumps({"exit_code": 0, "delivered": []}), encoding="utf-8"
+            )
+            return run_dir
+
+        with patch.object(jobs, "PROJECTS_ROOT", root), patch.object(
+            jobs.ER, "run_one", side_effect=success
+        ):
+            store = self._store(root / "runs")
+            parent = store.submit("task one", "")  # pi, model resolves to group
+            parent = store.submit(
+                "task one", "proj", harness="pi", model="9router/claude-haiku-4-5"
+            )
+            self._quiet(store)
+            child = store.submit("follow up", "", continue_from=parent["id"])
+            self._quiet(store)
+            self.assertEqual(child["model"], "9router/claude-haiku-4-5")
+
     def test_continuing_an_unknown_task_is_refused(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
