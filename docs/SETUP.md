@@ -47,6 +47,13 @@ variable (see `harness2/config.py`). The benchmark checkouts
 (`harvey-labs`, `job-bench-eval`, `workbuddy-bench`) and `opencode-config`
 remain under `dependencies/`.
 
+`OPENCODE_DIR` reaches Python only. The `~/.local/bin/opencode` wrapper carries
+its own copy of the checkout path in `--cwd`, so a relocated checkout also needs
+that wrapper edited — otherwise invocations fail with `ENOENT: Could not change
+directory to ...`. Python-side config changing cleanly is not evidence the
+wrapper works; run `opencode run "Reply with exactly: OC_OK" --model
+9router/claude-sonnet-4-6 --format json` to confirm.
+
 ## Models and credentials
 
 Copy `.env.example` to `.env` if you have not already done so. Set your Vertex AI
