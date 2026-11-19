@@ -35,7 +35,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from harness2 import config
-from harness2.web import jobs
+from harness2.web import health, jobs
+
+# Where the last probe result is kept, so a restarted panel still shows status
+# it learned earlier instead of claiming everything is unknown.
+HEALTH_FILE = config.RUNS / "web" / "health.json"
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -107,6 +111,8 @@ PAGE = """<!doctype html>
    <select id="project"></select>
    <select id="harness"><option value="">auto (route by task)</option></select>
    <button type="submit">Run</button>
+   <div id="hstat" class="meta"></div>
+   <button type="button" id="htest" class="ghost">Test all harnesses</button>
   </form>
   <div id="list"></div>
  </div>
@@ -121,11 +127,41 @@ async function boot() {
   const [ps, hs] = await Promise.all([sjson('/api/projects'), sjson('/api/harnesses')]);
   document.getElementById('project').innerHTML =
     ps.map(p => `<option value="${esc(p.name)}">${esc(p.name)}${p.git?' ·git':''}</option>`).join('');
-  document.getElementById('harness').innerHTML =
-    '<option value="">auto (route by task)</option>' +
-    hs.map(h => `<option value="${esc(h.id)}">${esc(h.id)}${h.default?' (default)':''}</option>`).join('');
+  renderHarnesses(hs);
   poll();
 }
+
+// A green/red dot on each option plus the reason it is down, so the picker
+// answers "which one works" without a second panel. Sorting already happened
+// server-side (healthy first), so option order carries the priority.
+function renderHarnesses(hs) {
+  const mark = h => h.healthy === true ? '✓' : (h.healthy === false ? '✗' : '·');
+  document.getElementById('harness').innerHTML =
+    '<option value="">auto (route by task)</option>' +
+    hs.map(h => `<option value="${esc(h.id)}" title="${esc(h.status||'')}">`
+      + `${mark(h)} ${esc(h.id)}${h.default?' (default)':''}`
+      + `${h.status?' — '+esc(h.status):''}</option>`).join('');
+}
+
+document.getElementById('htest').onclick = async () => {
+  const btn = document.getElementById('htest');
+  const out = document.getElementById('hstat');
+  btn.disabled = true;
+  out.textContent = 'testing local + remote models…';
+  try {
+    const r = await sjson('/api/health', {method:'POST'});
+    const t = r.tiers || {};
+    const down = Object.entries(r.harnesses||{})
+      .filter(([, v]) => !v.healthy).map(([k, v]) => `${k}: ${v.error || 'down'}`);
+    out.textContent = `local ${t.local?.ok?'ok':'FAIL'} · remote ${t.remote?.ok?'ok':'FAIL'}`
+      + (down.length ? ` · down — ${down.join('; ')}` : '');
+    renderHarnesses(await sjson('/api/harnesses'));
+  } catch (e) {
+    out.textContent = 'test failed: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 document.getElementById('new').onsubmit = async e => {
   e.preventDefault();
@@ -251,7 +287,12 @@ boot();
 """
 
 def _state() -> dict:
-    return {"projects": jobs.projects(), "harnesses": jobs.harnesses()}
+    last = health.load(HEALTH_FILE)
+    return {
+        "projects": jobs.projects(),
+        "harnesses": jobs.harnesses(last),
+        "health": last,
+    }
 
 def _make_handler(store: jobs.JobStore):
     class Handler(BaseHTTPRequestHandler):
@@ -289,7 +330,9 @@ def _make_handler(store: jobs.JobStore):
             if path == "/api/projects":
                 return self._json(jobs.projects())
             if path == "/api/harnesses":
-                return self._json(jobs.harnesses())
+                return self._json(jobs.harnesses(health.load(HEALTH_FILE)))
+            if path == "/api/health":
+                return self._json(health.load(HEALTH_FILE))
             if path.startswith("/api/tasks/"):
                 rest = path[len("/api/tasks/") :]
                 job_id, _, tail = rest.partition("/")
@@ -324,6 +367,13 @@ def _make_handler(store: jobs.JobStore):
                 except (ValueError, KeyError, RuntimeError) as exc:
                     return self._json({"error": str(exc)}, 400)
                 return self._json(job, 201)
+            if path == "/api/health":
+                # Synchronous on purpose: the probe is two gateway calls plus a
+                # --version per harness, so the button's spinner is honest and
+                # there is no second job kind to poll.
+                payload = health.probe()
+                health.save(HEALTH_FILE, payload)
+                return self._json(payload, 200)
             if path.startswith("/api/tasks/"):
                 rest = path[len("/api/tasks/") :]
                 job_id, _, action = rest.partition("/")

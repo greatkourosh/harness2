@@ -720,5 +720,34 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(self._store(root / "runs").list(), [])
 
 
+class HarnessOrderingTests(unittest.TestCase):
+    """The picker's order is what a hurried operator takes, so health wins."""
+
+    def test_healthy_first_then_unprobed_then_down(self):
+        fake = {
+            "at": "2026-11-19T00:00:00",
+            "harnesses": {
+                "t3code": {"healthy": False, "error": "container not running"},
+                "pi": {"healthy": True, "error": ""},
+            },
+        }
+        rows = jobs.harnesses(fake)
+        self.assertEqual(rows[0]["id"], "pi", "a healthy harness must lead")
+        unprobed = [r for r in rows if r["healthy"] is None]
+        self.assertEqual(
+            [r["priority"] for r in unprobed],
+            sorted((r["priority"] for r in unprobed), reverse=True),
+            "within a band, manifest priority decides",
+        )
+        self.assertEqual(rows[-1]["id"], "t3code", "a known-down harness goes last")
+        self.assertEqual(rows[-1]["status"], "container not running")
+
+    def test_status_is_surfaced_for_the_dropdown(self):
+        fake = {"harnesses": {"pi": {"healthy": False, "error": "pi not on PATH"}}}
+        row = next(r for r in jobs.harnesses(fake) if r["id"] == "pi")
+        self.assertIs(row["healthy"], False)
+        self.assertEqual(row["status"], "pi not on PATH")
+
+
 if __name__ == "__main__":
     unittest.main()

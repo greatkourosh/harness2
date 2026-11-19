@@ -602,9 +602,35 @@ def projects() -> list[dict]:
         row["mtime"] = time.strftime("%Y-%m-%d", time.localtime(row["mtime"]))
     return rows
 
-def harnesses() -> list[dict]:
-    """Runnable harnesses, for the panel's picker."""
-    return [
-        {"id": s.id, "label": s.label, "default": s.default, "priority": s.priority}
-        for s in registry.candidates(registry.load_all())
-    ]
+def harnesses(health: dict | None = None) -> list[dict]:
+    """Runnable harnesses, for the panel's picker, healthiest first.
+
+    `health` is the last probe result (`health.probe`), keyed by harness id. A
+    harness known to be healthy outranks one never probed, which outranks one
+    known to be down: the picker's first entry is what a hurried operator takes,
+    and it should be the one most likely to work. Within a band the manifest
+    priority decides, as before.
+    """
+    rows = health.get("harnesses") if isinstance(health, dict) else None
+    rows = rows if isinstance(rows, dict) else {}
+    out = []
+    for s in registry.candidates(registry.load_all()):
+        record = rows.get(s.id) or {}
+        known = bool(record)
+        healthy = bool(record.get("healthy"))
+        out.append(
+            {
+                "id": s.id,
+                "label": s.label,
+                "default": s.default,
+                "priority": s.priority,
+                "healthy": healthy if known else None,
+                "status": record.get("error", "") if known else "",
+                "checked": str((health or {}).get("at") or ""),
+                "_band": 0 if healthy else (1 if not known else 2),
+            }
+        )
+    out.sort(key=lambda r: (r["_band"], -r["priority"], r["id"]))
+    for row in out:
+        del row["_band"]
+    return out
