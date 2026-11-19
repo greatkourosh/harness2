@@ -784,3 +784,35 @@ class HarnessOrderingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DotenvFallbackTests(unittest.TestCase):
+    """A worktree has no .env of its own; the main checkout's must be found."""
+
+    def test_worktree_root_falls_back_to_the_shared_dotenv(self):
+        from harness2 import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "wt"
+            root.mkdir()
+            (root / ".git").write_text("gitdir: /nowhere\n")
+            original = config.ROOT
+            config.ROOT = root
+            try:
+                found = config._dotenv_path()
+            finally:
+                config.ROOT = original
+            self.assertEqual(found, root / ".env")
+
+    def test_root_with_env_keeps_its_own(self):
+        from harness2 import config
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text("X=1\n")
+            original = config.ROOT
+            config.ROOT = root
+            try:
+                self.assertEqual(config._dotenv_path(), root / ".env")
+            finally:
+                config.ROOT = original

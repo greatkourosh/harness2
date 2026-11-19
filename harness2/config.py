@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,7 +61,31 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
         os.environ.setdefault(key, value)
 
 
-load_dotenv()
+def _dotenv_path() -> Path:
+    """ROOT/.env, falling back to the main checkout's when ROOT is a worktree.
+
+    A worktree is a fresh checkout, and `.env` is gitignored, so it never
+    appears there. Without the fallback every gateway setting reads empty from a
+    worktree and model probes report every harness down for the wrong reason.
+    """
+    if (ROOT / ".env").is_file():
+        return ROOT / ".env"
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--path-format=absolute",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if common.returncode == 0:
+            shared = Path(common.stdout.strip()).parent / ".env"
+            if shared.is_file():
+                return shared
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ROOT / ".env"
+
+
+load_dotenv(_dotenv_path())
 
 
 def env(name: str, default=None):
