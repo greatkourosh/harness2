@@ -86,7 +86,7 @@ the user's own file, often carrying settings this package knows nothing about.
 |---|---|---|---|
 | `pi` | `~/.pi/agent/models.json` | `pi --print` | routing combos |
 | `opencode` | `~/.config/opencode/opencode.json` | `opencode run … --format json` | Claude |
-| `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
+| `deepseek` (dsh) | `~/.dsh/profiles/headless/cordis.patch.yml` | `dsh --profile headless --json` | `claude-sonnet-4-6`, `ag/*`, `*qwen*`/`*glm*`/`*deepseek*` |
 | `claude-code` | `~/.claude/settings.json` | `claude -p … --permission-mode auto --output-format stream-json --verbose` | Claude |
 | `claude-desktop` | `~/.config/Claude/claude_desktop_config.json` | *(none)* | Gemini |
 | `t3code` | `/media/kourosh/DEVNVME/docker/t3code-001/data` | `claude-sonnet-4-6` (pinned) | *(chosen in T3 Code)* |
@@ -155,6 +155,12 @@ Note the two dsh facts the manifest encodes, both verified by running it:
 - **`dsh --profile headless` takes no `--model` flag.** The model comes from the
   profile's `agent-default-model` plugin, so `model_flag` is empty and `apply`
   writes that entry — a provider block alone would leave the run with no model.
+- **`--json` is required, not decorative.** Without it dsh prints only the final
+  text line, and both readers (`_final_text`, `render_events`) parse its event
+  stream — so an answered run was recorded as `answer: null` and surfaced as
+  `no_files` at exit 0. The stream's own schema is documented in
+  `packages/bundle/headless/src/json-stream.ts` upstream; `render_dsh_events`
+  in `harness2/substrate/codex.py` is this repo's reading of it.
 
 Three more facts the opencode manifest encodes, each one a way a run failed
 before it was written down:
