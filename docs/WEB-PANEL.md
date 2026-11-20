@@ -146,6 +146,28 @@ behind one rollout:
 harness on `auto` routes by the task text, exactly as `harness2-harness do`
 does; picking one overrides that.
 
+#### Testing the harnesses
+
+**Test all harnesses** probes the two model tiers — a local model and a remote
+one — through the gateway, plus each harness's own `binary --version`, and
+writes the result to `runs/web/health.json`. It takes a few seconds, and the
+button is disabled while it runs.
+
+Each harness then carries its last result in the picker: `✓` healthy, `✗` down,
+`·` never probed, with the reason on the option's tooltip. Order is **healthy
+first, unprobed next, known-down last**, and manifest `priority` decides within
+a band — so the first entry is the one most likely to work.
+
+Both tiers are probed because they fail differently: the local one
+(`ollama-local/qwen3:8b-ctx32k`) spends this machine's GPU, the remote one
+(`claude-haiku-4-5`) spends the gateway's credentials. A harness is healthy when
+its binary runs **and** at least one tier answers, so a dead remote route does
+not hide a working local one.
+
+The probe is deliberately not a rollout per harness: ten real runs take minutes
+and several legitimately fail (dsh 403s on quota, `claude` needs `/login`), so
+the button answers "is it up", not "will this task succeed".
+
 **Task list** — every task, newest first, with its project, state
 (`queued` / `running` / `done` / `no output` / `failed`), harness and model. The
 page polls every 1.5s while anything is running and every 6s when everything has
@@ -272,7 +294,9 @@ The page is a thin client over a small JSON API, if you would rather script it:
 | Method | Path | Does |
 |---|---|---|
 | `GET` | `/api/projects` | project directories, each with a `git` flag |
-| `GET` | `/api/harnesses` | runnable harnesses |
+| `GET` | `/api/harnesses` | runnable harnesses, healthiest first, each with `healthy` and `status` |
+| `GET` | `/api/health` | the last probe result (tiers + per-harness), or `{}` if none |
+| `POST` | `/api/health` | run the probe now and persist it |
 | `GET` | `/api/tasks` | every task's current state |
 | `GET` | `/api/tasks/<id>` | one task |
 | `GET` | `/api/tasks/<id>/log` | its captured output |
@@ -284,6 +308,13 @@ The page is a thin client over a small JSON API, if you would rather script it:
 curl -s -X POST http://127.0.0.1:8090/api/tasks \
   -H 'Content-Type: application/json' \
   -d '{"task":"find the failing test","project":"myrepo"}'
+```
+
+Probing the harnesses is the same request the button makes — no body, and it
+returns the result it just persisted:
+
+```bash
+curl -s -X POST http://127.0.0.1:8090/api/health | jq '.tiers, .harnesses'
 ```
 
 `harness` and `model` are optional; leaving `harness` empty routes by the task
