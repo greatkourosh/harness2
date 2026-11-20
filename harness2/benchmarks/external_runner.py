@@ -91,12 +91,22 @@ def _read_metrics_stream(session: Path, harness: str) -> dict:
         etype = ev.get("type") or ev.get("event") or ""
         if etype in ("step_finish", "turn.completed", "message_stop"):
             turns += 1
+        # dsh reports one `status` per step; `step_end` is its step marker.
+        if etype == "status" and ev.get("phase") == "step_end":
+            turns += 1
         if isinstance(ev.get("num_turns"), int):
             declared_turns = ev["num_turns"]
         usage = ev.get("usage") or (ev.get("part") or {}).get("tokens")
         if isinstance(usage, dict):
-            tokens_in += int(usage.get("input") or usage.get("input_tokens") or 0)
-            tokens_out += int(usage.get("output") or usage.get("output_tokens") or 0)
+            # dsh spells these camelCase (`inputTokens`), the others snake_case.
+            tokens_in += int(
+                usage.get("input") or usage.get("input_tokens")
+                or usage.get("inputTokens") or 0
+            )
+            tokens_out += int(
+                usage.get("output") or usage.get("output_tokens")
+                or usage.get("outputTokens") or 0
+            )
             if etype == "result":
                 final_usage = (
                     int(usage.get("input") or usage.get("input_tokens") or 0),
@@ -110,6 +120,7 @@ def _read_metrics_stream(session: Path, harness: str) -> dict:
         "output_tokens": tokens_out or None,
         "answer": _final_text(session) or None,
     }
+
 
 
 def _final_text(session: Path) -> str:
@@ -145,6 +156,16 @@ def _final_text(session: Path) -> str:
         # claude nor the codex/opencode shape, so it needs its own branch.
         if isinstance(ev.get("reply"), str) and ev["reply"].strip():
             last_result = ev["reply"]
+            continue
+        # dsh (deepseek): the terminal `final` event carries the same answer the
+        # default mode prints, losslessly. Its committed `text` events carry the
+        # answer too, but with the model's reasoning folded into the front of the
+        # string, so `final` is preferred and text is the fallback.
+        if etype == "final" and isinstance(ev.get("text"), str) and ev["text"].strip():
+            last_result = ev["text"]
+            continue
+        if etype == "text" and isinstance(ev.get("text"), str) and ev["text"].strip():
+            last_item_text = ev["text"]
             continue
         # codex and opencode: a thread item / part carrying text.
         item = ev.get("item") if isinstance(ev.get("item"), dict) else ev.get("part")

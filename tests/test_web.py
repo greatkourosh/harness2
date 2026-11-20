@@ -58,6 +58,26 @@ _T3_JSONL = (
     '"reply":"pong","error":null}\n'
 )
 
+# dsh (deepseek) `--json`: verified shape, see
+# third_party/deepseek_harness/packages/bundle/headless/src/json-stream.ts
+_DSH_JSONL = (
+    '{"type":"session","sessionId":"s1","cwd":"/tmp/ws"}\n'
+    '{"type":"status","phase":"turn_start","turn":1}\n'
+    '{"type":"status","phase":"step_start","turn":1,"step":1}\n'
+    '{"type":"text","text":"Hey. What you need?"}\n'
+    '{"type":"status","phase":"step_end","turn":1,"step":1,'
+    '"usage":{"inputTokens":6363,"outputTokens":65,"totalTokens":6428}}\n'
+    '{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"completed"}}\n'
+    '{"type":"final","text":"Hey. What you need?"}\n'
+)
+
+_DSH_TOOL_JSONL = (
+    '{"type":"session","sessionId":"s1"}\n'
+    '{"type":"tool_call","callId":"c1","tool":"bash","input":{"command":"ls -la"}}\n'
+    '{"type":"tool_result","callId":"c1","status":"completed","result":"a.txt"}\n'
+    '{"type":"final","text":"one file"}\n'
+)
+
 
 class RenderCaptureTests(unittest.TestCase):
     """The panel's log pane reads the same renderers the benchmark side does.
@@ -86,6 +106,20 @@ class RenderCaptureTests(unittest.TestCase):
         out = self._render(_T3_JSONL, "t3code")
         self.assertIn("[ASSISTANT] pong", out)
         self.assertNotIn("threadId", out)
+
+    def test_a_dsh_stream_renders_its_answer_not_json(self):
+        """deepseek's dsh `--json` is its own schema; without a branch it fell
+        through to the raw capture, so the panel showed log lines and the job
+        reported no answer at all."""
+        out = self._render(_DSH_JSONL, "deepseek")
+        self.assertIn("[ASSISTANT] Hey. What you need?", out)
+        self.assertNotIn('"sessionId"', out)
+
+    def test_a_dsh_stream_renders_tool_calls_and_results(self):
+        out = self._render(_DSH_TOOL_JSONL, "deepseek")
+        self.assertIn("[ACTION] bash", out)
+        self.assertIn("ls -la", out)
+        self.assertIn("[OBSERVATION] a.txt", out)
 
     def test_a_t3_object_with_an_error_surfaces_it(self):
         out = self._render(

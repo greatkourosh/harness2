@@ -549,6 +549,70 @@ def render_claude_events(path: Path, raw: str, *, obs_trunc: int, max_chars: int
     return rendered
 
 
+def _is_dsh_stream(raw: str) -> bool:
+    """True for dsh headless `--json` (deepseek's harness), else False.
+
+    Its opener is `{"type":"session","sessionId":...}` and its terminal event
+    `{"type":"final","text":...}`; no other harness here emits `session`, and
+    neither shape exists elsewhere, so either one identifies a dsh capture --
+    including a run killed before its `final`, which still must render.
+    """
+    for ev in _iter_json_lines(raw):
+        if ev.get("type") == "session" and "sessionId" in ev:
+            return True
+        if ev.get("type") == "final" and isinstance(ev.get("text"), str):
+            return True
+    return False
+
+
+def render_dsh_events(raw: str, *, obs_trunc: int, max_chars: int, args_trunc: int) -> str:
+    """Render dsh's `--json` projection into the shared grammar.
+
+    Schema: headless/src/json-stream.ts. Text arrives committed per step, tool
+    calls/results as `tool_call`/`tool_result`, usage on `status`/`step_end`, and
+    the terminal `final` repeats the answer -- so `final` is skipped here when
+    text was already emitted, and used alone for a run that emitted none.
+    """
+    lines: list[str] = []
+    saw_text = False
+    final_text = ""
+    for ev in _iter_json_lines(raw):
+        et = ev.get("type")
+        if et == "text":
+            txt = ev.get("text")
+            if isinstance(txt, str) and txt.strip():
+                lines.append(f"[ASSISTANT] {_clip(txt, obs_trunc)}")
+                saw_text = True
+        elif et == "thinking":
+            _emit_if(lines, "REASONING", ev.get("text"), obs_trunc)
+        elif et == "tool_call":
+            name = ev.get("tool") or "tool"
+            args = ev.get("input")
+            if not isinstance(args, str):
+                args = json.dumps(args, ensure_ascii=False, default=str)
+            _emit(lines, f"[ACTION] {name}: {_clip(args, args_trunc)}")
+        elif et == "tool_result":
+            status = ev.get("status")
+            tag = "OBSERVATION ERROR" if status == "error" else "OBSERVATION"
+            _emit(lines, f"[{tag}] {_clip(ev.get('result'), obs_trunc)}")
+        elif et == "status" and ev.get("phase") == "turn_end":
+            reason = ev.get("reason")
+            kind = reason.get("kind") if isinstance(reason, dict) else reason
+            _emit(lines, f"[HARNESS] turn {ev.get('turn')} | {kind or 'ended'}")
+        elif et == "final" and isinstance(ev.get("text"), str):
+            final_text = ev["text"]
+    if final_text.strip() and not saw_text:
+        lines.append(f"[ASSISTANT] {_clip(final_text, obs_trunc)}")
+
+    rendered = "\n".join(lines).strip()
+    if not rendered:
+        return "(no parseable events in trajectory)"
+    if len(rendered) > max_chars:
+        dropped = len(rendered) - max_chars
+        rendered = rendered[:max_chars] + "\n" + _TRUNC_FMT.format(n=dropped)
+    return rendered
+
+
 def _int_or_zero(v) -> int:
     try:
         return int(v or 0)
@@ -571,6 +635,16 @@ def render_events(path: Path, *, obs_trunc: int, max_chars: int, args_trunc: int
     if raw is not None:
         return render_claude_events(path, raw, obs_trunc=obs_trunc, max_chars=max_chars,
                                     args_trunc=args_trunc)
+
+    # dsh (deepseek) has its own `--json` schema: routed the same way, before the
+    # codex walk, whose `item`/`payload` shapes it does not share.
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return f"(failed to read trajectory: {e})"
+    if _is_dsh_stream(text):
+        return render_dsh_events(text, obs_trunc=obs_trunc, max_chars=max_chars,
+                                 args_trunc=args_trunc)
 
     lines: list[str] = []
     for ev in parse_items(Path(path)):
