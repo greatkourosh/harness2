@@ -164,10 +164,17 @@ task's log here reads like the same task's trajectory there: one
 `[ACTION]`/`[OBSERVATION]`/`[ASSISTANT]` line per event instead of one JSON
 object per line.
 
-Two shapes are not event streams and are handled separately:
+Three shapes are not in the codex/opencode grammar and are handled separately:
 
 - **t3code** writes one object per turn (`{"threadId":…,"reply":…}`), not a
   stream. It gets a small renderer of its own.
+- **deepseek** (dsh `--json`) writes its own event schema (`session`,
+  `status`, `text`, `thinking`, `tool_call`, `tool_result`, `final`), so it is
+  routed to its own renderer before the codex walk. The same branch supplies
+  its `answer`: the terminal `final` event carries the closing text, which is
+  why an answered dsh run reads as `done` rather than as an empty run.
+  A capture killed before `final` still renders — its opening `session` event
+  is enough to identify it.
 - **pi** (`--print`) writes bare prose. There is nothing to parse, so the raw
   text is the log.
 
